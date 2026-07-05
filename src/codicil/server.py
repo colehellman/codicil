@@ -39,7 +39,10 @@ SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__",
 
 MAX_CHUNK = 1500   # chars per chunk
 OVERLAP   = 150    # overlap between consecutive chunks
-DISTANCE_THRESHOLD = 0.5  # cosine distance; > 0.5 means < 50% similarity → dropped
+# Minimum similarity (0–1) for a passage to be returned; score = 1 - cosine_distance.
+# Configurable so you can trade recall for precision without editing code. Raise it to
+# return only very close matches; lower it to surface more.
+MIN_SCORE = float(os.environ.get("CODICIL_MIN_SCORE", "0.5"))
 
 # ---------------------------------------------------------------------------
 # Storage
@@ -147,13 +150,23 @@ def grep_fallback(query: str, n_results: int = 5) -> str:
 
         rel = str(path.relative_to(REPO_PATH))
         lines = raw.splitlines()
-        snippet_lines: list[str] = []
+        # Collect the set of line indices to show (a window around each keyword hit).
+        # Using a set de-duplicates the overlap when hits land on adjacent lines.
+        include: set[int] = set()
         for i, line in enumerate(lines):
             if any(kw in line.lower() for kw in keywords):
-                snippet_lines.extend(lines[max(0, i - 1): i + 4])
-                if len(snippet_lines) >= 20:
-                    break
-        matches.append((score, rel, "\n".join(snippet_lines[:20])))
+                include.update(range(max(0, i - 1), min(len(lines), i + 4)))
+            if len(include) >= 20:
+                break
+        picked = sorted(include)[:20]
+        snippet_lines: list[str] = []
+        prev = None
+        for j in picked:
+            if prev is not None and j > prev + 1:
+                snippet_lines.append("…")  # non-contiguous region
+            snippet_lines.append(lines[j])
+            prev = j
+        matches.append((score, rel, "\n".join(snippet_lines)))
 
     matches.sort(key=lambda x: x[0], reverse=True)
     matches = matches[:n_results]
@@ -317,9 +330,10 @@ def query_docs(query: str, n_results: int = 5) -> str:
     for doc, meta, dist in zip(
         results["documents"][0], results["metadatas"][0], results["distances"][0]
     ):
-        if dist > DISTANCE_THRESHOLD:
+        score = round(1 - dist, 3)
+        if score < MIN_SCORE:
             continue
-        parts.append(f"**{meta['source']}** (score {round(1 - dist, 3)})\n\n{doc}")
+        parts.append(f"**{meta['source']}** (score {score})\n\n{doc}")
     return "\n\n---\n\n".join(parts) if parts else "No sufficiently relevant documentation found."
 
 

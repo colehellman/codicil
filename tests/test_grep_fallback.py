@@ -19,6 +19,15 @@ def test_grep_reports_no_matches(docs_repo):
     assert "no matches" in out.lower()
 
 
+def test_grep_snippet_has_no_duplicate_lines(docs_repo):
+    # Keyword on adjacent lines used to produce overlapping, duplicated snippet lines.
+    (docs_repo / "b.md").write_text(
+        "# Budget\n\nbudget item alpha\nbudget item bravo\nbudget item charlie\n"
+    )
+    out = server.grep_fallback("budget")
+    assert out.count("budget item bravo") == 1
+
+
 def test_grep_ignores_non_doc_files(docs_repo):
     (docs_repo / "notes.md").write_text("# Notes\n\nbudget planning details.\n")
     (docs_repo / "image.png").write_bytes(b"budget planning binary junk")
