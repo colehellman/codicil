@@ -232,6 +232,8 @@ def index_repo(force: bool = False) -> tuple[int, int]:
     """Index docs under REPO_PATH. Incremental by mtime. Returns (indexed, skipped)."""
     state = _load_state()
     indexed = skipped = 0
+    embed_failures = 0
+    embed_error: str | None = None
 
     # Drop index entries for files that no longer exist.
     for rel in list(state.keys()):
@@ -271,7 +273,10 @@ def index_repo(force: bool = False) -> tuple[int, int]:
         try:
             embeddings = embed_many(chunks)
         except RuntimeError as e:
-            print(f"codicil: skipping {rel} — {e}", file=sys.stderr)
+            # Same failure (e.g. embed host down) repeats per file; report it once
+            # after the loop instead of flooding stderr with identical lines.
+            embed_failures += 1
+            embed_error = str(e)
             skipped += 1
             continue
 
@@ -286,6 +291,9 @@ def index_repo(force: bool = False) -> tuple[int, int]:
         )
         state[rel] = mtime
         indexed += 1
+
+    if embed_failures:
+        print(f"codicil: {embed_failures} file(s) skipped — {embed_error}", file=sys.stderr)
 
     _save_state(state)
     return indexed, skipped
