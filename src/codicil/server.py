@@ -233,7 +233,7 @@ def index_repo(force: bool = False) -> tuple[int, int]:
     state = _load_state()
     indexed = skipped = 0
     embed_failures = 0
-    embed_error: str | None = None
+    embed_errors: set[str] = set()
 
     # Drop index entries for files that no longer exist.
     for rel in list(state.keys()):
@@ -273,10 +273,12 @@ def index_repo(force: bool = False) -> tuple[int, int]:
         try:
             embeddings = embed_many(chunks)
         except RuntimeError as e:
-            # Same failure (e.g. embed host down) repeats per file; report it once
-            # after the loop instead of flooding stderr with identical lines.
+            # Same failure (e.g. embed host down) usually repeats per file; report
+            # once after the loop instead of flooding stderr with identical lines.
+            # Distinct messages are kept (not just the last one) so a mid-run
+            # change in failure cause isn't silently discarded.
             embed_failures += 1
-            embed_error = str(e)
+            embed_errors.add(str(e))
             skipped += 1
             continue
 
@@ -293,7 +295,8 @@ def index_repo(force: bool = False) -> tuple[int, int]:
         indexed += 1
 
     if embed_failures:
-        print(f"codicil: {embed_failures} file(s) skipped — {embed_error}", file=sys.stderr)
+        reasons = "; ".join(sorted(embed_errors))
+        print(f"codicil: {embed_failures} file(s) skipped — {reasons}", file=sys.stderr)
 
     _save_state(state)
     return indexed, skipped
