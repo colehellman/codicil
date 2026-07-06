@@ -47,7 +47,14 @@ That's not a lucky accident. It's the entire design philosophy, made concrete: a
   → Claude answers from your actual config — not a guess.
 ```
 
-*Illustrative. An animated demo ships with the first release.*
+*Illustrative — the Claude Code chat UI isn't something a terminal recording can reproduce.*
+
+![Codicil answering a real query in a terminal, via keyword fallback](docs/demo/demo.gif)
+
+*The GIF above is real, unedited output — the same `query_docs` function called directly in a
+terminal instead of over MCP. No local embedding host was running when this was recorded, so
+it's answering via keyword fallback, not semantic search — a live demonstration of the
+degrade-don't-fail behavior this project is actually about.*
 
 ## What it is
 
