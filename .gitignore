@@ -15,6 +15,9 @@ venv/
 # Serena MCP agent tool state (local dev aid, not part of the product)
 .serena/
 
+# Claude Code local settings (permissions, local MCP toggles — machine-specific)
+.claude/*.local.json
+
 # Editor / OS
 .DS_Store
 .idea/
