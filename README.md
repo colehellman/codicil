@@ -85,7 +85,7 @@ architecture notes            + semantic search           scoped and ranked
 1. **Index** — Codicil walks your repo, chunks docs along their structure (markdown headings), and stores embeddings in a local index. Re-indexing is incremental: only changed files are touched.
 2. **Search** — Your assistant calls a search tool over MCP. Codicil embeds the query, returns the closest passages, and drops anything below a relevance threshold rather than padding the answer with noise.
 3. **Degrade** — If no embedding backend is reachable, the same query is answered by keyword search read straight off disk. Same tool, same call, no configuration change, no failure.
-4. **Stay fresh** — Optional git hooks re-index on commit and on doc edits, so the index tracks reality without you thinking about it.
+4. **Stay fresh** — Re-run `codicil index` (or call `reindex_docs` over MCP) whenever you want the index refreshed. Indexing is incremental by mtime, so a no-op pass is a cheap stat sweep — there's no manual bookkeeping to get this right.
 
 ## Reliability by Design
 
@@ -94,7 +94,7 @@ Most tools *claim* reliability. Here are the specific decisions that implement i
 - **Graceful degradation.** Every dependency has a fallback that still returns a useful answer. No embedding host? Keyword search off disk. Empty index? Same. The tool has no single point of "returns nothing."
 - **Atomic-swap reindexing.** New content is embedded *before* the old content is removed. A failed or interrupted re-index can never leave you with *less* memory than you started with — the worst case is stale, never empty.
 - **Incremental indexing.** Re-indexing compares file modification times and touches only what changed. A no-op pass is a cheap stat sweep, so keeping the index fresh is nearly free.
-- **Concurrent-safe writes.** Index access is serialized so a live query never races a re-index, and only one process is ever allowed to own the store — the failure modes that corrupt embedded databases are structurally excluded, not hoped against.
+- **Concurrent-safe writes.** Index access within a process is serialized (a single reentrant lock), so a live query never races a re-index — no manual locking to configure.
 
 ## Design principles
 
