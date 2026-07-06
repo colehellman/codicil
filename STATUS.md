@@ -50,11 +50,19 @@ a working `query_docs` tool that answers correctly in an MCP client.
   the embed-failure warning, so there was no way to silence the warning without also losing
   the summary. Verified end-to-end: `codicil index . 2>/dev/null` now still prints the
   summary; `codicil index . 1>/dev/null` shows only the warning.
+- ⚠️ **Ranking-wobble mitigated, not fully validated** (PR #11) — `query_docs` had no
+  reranking step at all; now widens the candidate pool and blends embedding score with a
+  keyword-overlap signal (`KEYWORD_RERANK_WEIGHT = 0.05`) before truncating to the requested
+  count. Two regression tests with hand-crafted vectors confirm the mechanism: it corrects
+  the exact measured margin (0.598 vs 0.611) and doesn't override a genuinely larger
+  embedding-score gap (0.9 vs 0.55). **Not verified against the real measured wobble** — no
+  reachable embedding host in this environment, and the test suite's `fake_vec` fixture is a
+  hash with no semantic meaning. Also a no-op for queries with no token longer than 2 chars
+  (e.g. a bare acronym) — `_extract_keywords` yields no keyword signal in that case.
 
 ### Open issues (candidates for GitHub issues)
-1. **Ranking wobble on vague/short queries.** With `nomic-embed-text`, a vague query can
-   rank a loosely-related doc just above the right one (measured previously: 0.611 vs 0.598).
-   Returning top-N mitigates it; a reranking step is the real fix. Not yet addressed.
+1. ~~Ranking wobble on vague/short queries~~ — mitigated (PR #11, see above), but not
+   verified against a real embedding host. Revisit if the wobble still shows up in practice.
 2. ~~Repo metadata gap~~ — done, description + topics set (see above).
 3. ~~`codicil index` UX rough edge~~ — done. Per-file warning spam consolidated (PR #6) and
    the summary moved to stdout so it's independent of the warning stream (PR #9).
@@ -62,15 +70,16 @@ a working `query_docs` tool that answers correctly in an MCP client.
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
 
 ## Git
-- 12 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
+- 14 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
   (gitignore update) → `fb54d07` (setup docs + CI, PR #1) → `2ba04a6` (STATUS.md refresh,
   PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4) → `bd37d6c`
   (STATUS.md refresh, PR #5) → `6421ce0` (embed-warning consolidation, PR #6) → `557b8e2`
   (README wording fix, PR #7) → `669d6d6` (STATUS.md refresh, PR #8) → `6bd2dca` (index
-  summary to stdout, PR #9).
+  summary to stdout, PR #9) → `2c305bc` (STATUS.md refresh, PR #10) → `d0339a6`
+  (keyword-overlap reranking, PR #11).
 - Remote: `origin` → `git@github.com:colehellman/codicil.git`, public, default branch `main`.
 - Standing process: every change lands via branch → PR → review → fix findings → squash-merge
-  → pull, no direct commits to `main` (established this session, PRs #1–#9 all followed it).
+  → pull, no direct commits to `main` (established this session, PRs #1–#11 all followed it).
 - Open branch, no PR yet: `blog-draft` — see below.
 
 ## Next steps (agreed sequence)
