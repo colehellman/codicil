@@ -48,7 +48,7 @@ a working `query_docs` tool that answers correctly in an MCP client.
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
 
 ## Git
-- 8 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
+- 7 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
   (gitignore update) → `fb54d07` (setup docs + CI, PR #1) → `2ba04a6` (STATUS.md refresh,
   PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4).
 - Remote: `origin` → `git@github.com:colehellman/codicil.git`, public, default branch `main`.
