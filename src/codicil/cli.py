@@ -2,7 +2,6 @@
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 from . import __version__
@@ -35,10 +34,11 @@ def main() -> None:
 
     if args.command == "index":
         indexed, skipped = server.index_repo(force=args.force)
+        # Informational, not a warning — stdout, so `2>/dev/null` silences the
+        # embed-failure warning without also hiding this summary.
         print(
             f"Indexed {indexed}, skipped {skipped} "
-            f"({server.collection.count()} total chunks) in {repo}.",
-            file=sys.stderr,
+            f"({server.collection.count()} total chunks) in {repo}."
         )
     elif args.command == "serve":
         server.serve()
