@@ -48,10 +48,15 @@ MIN_SCORE = float(os.environ.get("CODICIL_MIN_SCORE", "0.5"))
 # related one (measured previously: 0.611 vs 0.598 — well within embedding noise).
 # Widen the candidate pool past what's returned, then nudge the final order with a
 # cheap keyword-overlap signal before truncating to n_results. Embedding score stays
-# dominant (and is what's displayed) — this only breaks close ties, it isn't a
-# full reranker.
+# dominant (and is what's displayed). Keep this weight small: at 0.05, keyword
+# overlap can only flip candidates whose embedding scores differ by less than
+# weight/(1-weight) ≈ 0.05 — comfortably covering the measured 0.013 gap without
+# letting keyword-stuffed-but-less-relevant chunks override a real quality gap.
+# Known gap: _extract_keywords drops tokens ≤2 chars, so a query with no token
+# longer than that (e.g. a bare acronym) gets no keyword signal at all and
+# reranking becomes a no-op — falls back to pure embedding order, same as before.
 RERANK_POOL_SIZE = 15
-KEYWORD_RERANK_WEIGHT = 0.15
+KEYWORD_RERANK_WEIGHT = 0.05
 
 # ---------------------------------------------------------------------------
 # Storage
@@ -351,7 +356,9 @@ def query_docs(query: str, n_results: int = 5) -> str:
         return grep_fallback(query, n_results)
 
     n = min(max(n_results, 1), 10, collection.count())
-    pool = min(max(n, RERANK_POOL_SIZE), collection.count())
+    # n is capped at 10 (above) and RERANK_POOL_SIZE is 15, so the pool always
+    # widens to RERANK_POOL_SIZE — no need to max() against n.
+    pool = min(RERANK_POOL_SIZE, collection.count())
     results = collection.query(
         query_embeddings=[q_vec],
         n_results=pool,
