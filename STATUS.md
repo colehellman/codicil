@@ -1,6 +1,6 @@
 # Codicil — Status & Handoff
 
-_Last updated: 2026-07-05. This is a working handoff note, not marketing — see `README.md` for the pitch._
+_Last updated: 2026-07-06. This is a working handoff note, not marketing — see `README.md` for the pitch._
 
 ## Where it stands: Milestone 1 (prove the idea) — complete
 
@@ -32,28 +32,41 @@ a working `query_docs` tool that answers correctly in an MCP client.
   `STATUS.md`, `.github/` in PR #3). **Not yet uploaded to PyPI** — build-only so far.
 - ⚠️ Semantic path (real embeddings via remote Ollama, `nomic-embed-text`) was verified in an
   earlier session per prior notes, not re-verified since.
+- ✅ **Embed-failure warning noise fixed** (PR #6) — `index_repo` used to print one identical
+  "cannot reach embedding host" line per file (~16 lines on this repo's own doc count); now
+  counts failures and prints one consolidated summary line, with distinct error messages kept
+  (not collapsed to the last one) if failures have different causes in the same run. Verified
+  end-to-end: `codicil index .` with Ollama unreachable now prints 1 warning line, not 8+.
+- ✅ **README corrected to match actual behavior** (PR #7) — removed an unimplemented "optional
+  git hooks re-index on commit" claim (no such code exists anywhere in the repo) and narrowed
+  the "only one process is ever allowed to own the store" claim to what `_synchronized`
+  (a `threading.RLock`) actually guarantees: in-process serialization only, not a cross-process
+  lock.
+- ✅ **Repo description and topics set** — was empty (`gh repo view` confirmed
+  `description: ""`); now has a description matching README's pitch and topics
+  (`mcp`, `rag`, `llm`, `claude`, `documentation`, `semantic-search`) matching
+  `pyproject.toml`'s existing keywords.
 
 ### Open issues (candidates for GitHub issues)
 1. **Ranking wobble on vague/short queries.** With `nomic-embed-text`, a vague query can
    rank a loosely-related doc just above the right one (measured previously: 0.611 vs 0.598).
    Returning top-N mitigates it; a reranking step is the real fix. Not yet addressed.
-2. **Repo metadata gap.** The public GitHub repo has an empty `description` field
-   (confirmed via `gh repo view`) — worth setting for discoverability.
-3. **`codicil index` UX rough edge.** With no reachable embedding host, indexing prints one
-   "cannot reach embedding host" warning per file to stderr — for this repo's own doc count,
-   that's ~16 near-identical lines, and the summary line goes to stderr too, so there's no way
-   to show a quiet summary without also hiding it. Surfaced while building the demo GIF
-   (worked around there by not showing the `index` step); not fixed in the product itself.
+2. ~~Repo metadata gap~~ — done, description + topics set (see above).
+3. **`codicil index` UX rough edge — partially fixed.** The per-file warning spam is fixed
+   (PR #6, see above). Still open: the summary line (`cli.py`) is hardcoded to stderr with no
+   quiet/verbose flag, so there's still no way to suppress it without also losing it.
 4. ~~Hardcoded relevance threshold~~ — done. `CODICIL_MIN_SCORE` (default 0.5).
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
 
 ## Git
-- 7 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
+- 10 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
   (gitignore update) → `fb54d07` (setup docs + CI, PR #1) → `2ba04a6` (STATUS.md refresh,
-  PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4).
+  PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4) → `bd37d6c`
+  (STATUS.md refresh, PR #5) → `6421ce0` (embed-warning consolidation, PR #6) → `557b8e2`
+  (README wording fix, PR #7).
 - Remote: `origin` → `git@github.com:colehellman/codicil.git`, public, default branch `main`.
 - Standing process: every change lands via branch → PR → review → fix findings → squash-merge
-  → pull, no direct commits to `main` (established this session, PRs #1–#4 all followed it).
+  → pull, no direct commits to `main` (established this session, PRs #1–#7 all followed it).
 - Open branch, no PR yet: `blog-draft` — see below.
 
 ## Next steps (agreed sequence)
