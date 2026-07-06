@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-**Python 3.11.** `chromadb` wheels are reliable on 3.11; other versions are not supported. The
-project's own development venv runs 3.11.15.
+**Python 3.11.** `pyproject.toml` declares `>=3.10`, but this repo only tests and supports
+3.11 — `chromadb` wheels are unreliable on other versions. The project's own development venv
+runs 3.11.15.
 
 ## Install
 
@@ -43,7 +44,8 @@ force a full reindex before starting the server.
 ## Configuration
 
 All configuration is read from the environment at import time. Defaults work out of the box
-with no setup:
+with no setup. (This table mirrors the one in `CLAUDE.md` — keep both in sync if defaults
+change in `server.py`.)
 
 | Var | Default | Purpose |
 |-----|---------|---------|
