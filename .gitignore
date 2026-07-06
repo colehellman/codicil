@@ -12,6 +12,9 @@ venv/
 # Codicil local index (never commit the store)
 .codicil/
 
+# Serena MCP agent tool state (local dev aid, not part of the product)
+.serena/
+
 # Editor / OS
 .DS_Store
 .idea/
