@@ -10,5 +10,7 @@ import sys
 from codicil import server
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(f"usage: {sys.argv[0]} <query> [n_results]")
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     print(server.query_docs(sys.argv[1], n_results=n))
