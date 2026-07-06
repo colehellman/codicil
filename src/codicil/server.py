@@ -44,6 +44,20 @@ OVERLAP   = 150    # overlap between consecutive chunks
 # return only very close matches; lower it to surface more.
 MIN_SCORE = float(os.environ.get("CODICIL_MIN_SCORE", "0.5"))
 
+# Reranking: a vague/short query can leave the right chunk just below a loosely
+# related one (measured previously: 0.611 vs 0.598 — well within embedding noise).
+# Widen the candidate pool past what's returned, then nudge the final order with a
+# cheap keyword-overlap signal before truncating to n_results. Embedding score stays
+# dominant (and is what's displayed). Keep this weight small: at 0.05, keyword
+# overlap can only flip candidates whose embedding scores differ by less than
+# weight/(1-weight) ≈ 0.05 — comfortably covering the measured 0.013 gap without
+# letting keyword-stuffed-but-less-relevant chunks override a real quality gap.
+# Known gap: _extract_keywords drops tokens ≤2 chars, so a query with no token
+# longer than that (e.g. a bare acronym) gets no keyword signal at all and
+# reranking becomes a no-op — falls back to pure embedding order, same as before.
+RERANK_POOL_SIZE = 15
+KEYWORD_RERANK_WEIGHT = 0.05
+
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
@@ -124,11 +138,24 @@ def embed_many(texts: list[str]) -> list[list[float]]:
 # Keyword fallback (used when the embedding host is offline)
 # ---------------------------------------------------------------------------
 
+def _extract_keywords(query: str) -> list[str]:
+    return [w.lower() for w in query.split() if len(w) > 2][:5]
+
+
+def _keyword_overlap(keywords: list[str], text: str) -> float:
+    """Fraction of `keywords` present in `text` (0..1). Used to nudge semantic
+    reranking, not as a standalone relevance signal."""
+    if not keywords:
+        return 0.0
+    lowered = text.lower()
+    return sum(1 for kw in keywords if kw in lowered) / len(keywords)
+
+
 def grep_fallback(query: str, n_results: int = 5) -> str:
     """Pure-Python keyword search over repo files when embeddings are unavailable.
     Scores each file by how many query keywords it contains, then extracts the
     best-matching lines. No index or external binary required."""
-    keywords = [w.lower() for w in query.split() if len(w) > 2][:5]
+    keywords = _extract_keywords(query)
     if not keywords:
         return "No search terms provided."
 
@@ -329,23 +356,41 @@ def query_docs(query: str, n_results: int = 5) -> str:
         return grep_fallback(query, n_results)
 
     n = min(max(n_results, 1), 10, collection.count())
+    # n is capped at 10 (above) and RERANK_POOL_SIZE is 15, so the pool always
+    # widens to RERANK_POOL_SIZE — no need to max() against n.
+    pool = min(RERANK_POOL_SIZE, collection.count())
     results = collection.query(
         query_embeddings=[q_vec],
-        n_results=n,
+        n_results=pool,
         include=["documents", "metadatas", "distances"],
     )
     if not results["documents"][0]:
         return "No relevant documentation found."
 
-    parts = []
+    keywords = _extract_keywords(query)
+    candidates = []  # (rerank_score, embed_score, doc, meta)
     for doc, meta, dist in zip(
         results["documents"][0], results["metadatas"][0], results["distances"][0]
     ):
-        score = round(1 - dist, 3)
-        if score < MIN_SCORE:
+        embed_score = round(1 - dist, 3)
+        if embed_score < MIN_SCORE:
             continue
-        parts.append(f"**{meta['source']}** (score {score})\n\n{doc}")
-    return "\n\n---\n\n".join(parts) if parts else "No sufficiently relevant documentation found."
+        overlap = _keyword_overlap(keywords, doc)
+        rerank_score = (1 - KEYWORD_RERANK_WEIGHT) * embed_score + KEYWORD_RERANK_WEIGHT * overlap
+        candidates.append((rerank_score, embed_score, doc, meta))
+    if not candidates:
+        return "No sufficiently relevant documentation found."
+
+    # Rerank the wider pool by the blended score, then keep only the originally
+    # requested count. The displayed score is still the raw embedding similarity —
+    # the blend only decides order, so CODICIL_MIN_SCORE's documented meaning
+    # (embedding similarity) doesn't change.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    parts = [
+        f"**{meta['source']}** (score {embed_score})\n\n{doc}"
+        for _, embed_score, doc, meta in candidates[:n]
+    ]
+    return "\n\n---\n\n".join(parts)
 
 
 @mcp.tool()
