@@ -46,27 +46,31 @@ a working `query_docs` tool that answers correctly in an MCP client.
   `description: ""`); now has a description matching README's pitch and topics
   (`mcp`, `rag`, `llm`, `claude`, `documentation`, `semantic-search`) matching
   `pyproject.toml`'s existing keywords.
+- ✅ **`codicil index` summary moved to stdout** (PR #9) — it previously shared stderr with
+  the embed-failure warning, so there was no way to silence the warning without also losing
+  the summary. Verified end-to-end: `codicil index . 2>/dev/null` now still prints the
+  summary; `codicil index . 1>/dev/null` shows only the warning.
 
 ### Open issues (candidates for GitHub issues)
 1. **Ranking wobble on vague/short queries.** With `nomic-embed-text`, a vague query can
    rank a loosely-related doc just above the right one (measured previously: 0.611 vs 0.598).
    Returning top-N mitigates it; a reranking step is the real fix. Not yet addressed.
 2. ~~Repo metadata gap~~ — done, description + topics set (see above).
-3. **`codicil index` UX rough edge — partially fixed.** The per-file warning spam is fixed
-   (PR #6, see above). Still open: the summary line (`cli.py`) is hardcoded to stderr with no
-   quiet/verbose flag, so there's still no way to suppress it without also losing it.
+3. ~~`codicil index` UX rough edge~~ — done. Per-file warning spam consolidated (PR #6) and
+   the summary moved to stdout so it's independent of the warning stream (PR #9).
 4. ~~Hardcoded relevance threshold~~ — done. `CODICIL_MIN_SCORE` (default 0.5).
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
 
 ## Git
-- 10 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
+- 12 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
   (gitignore update) → `fb54d07` (setup docs + CI, PR #1) → `2ba04a6` (STATUS.md refresh,
   PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4) → `bd37d6c`
   (STATUS.md refresh, PR #5) → `6421ce0` (embed-warning consolidation, PR #6) → `557b8e2`
-  (README wording fix, PR #7).
+  (README wording fix, PR #7) → `669d6d6` (STATUS.md refresh, PR #8) → `6bd2dca` (index
+  summary to stdout, PR #9).
 - Remote: `origin` → `git@github.com:colehellman/codicil.git`, public, default branch `main`.
 - Standing process: every change lands via branch → PR → review → fix findings → squash-merge
-  → pull, no direct commits to `main` (established this session, PRs #1–#7 all followed it).
+  → pull, no direct commits to `main` (established this session, PRs #1–#9 all followed it).
 - Open branch, no PR yet: `blog-draft` — see below.
 
 ## Next steps (agreed sequence)
