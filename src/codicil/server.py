@@ -35,7 +35,7 @@ _USE_NOMIC_PREFIX = "nomic" in EMBED_MODEL.lower()
 
 INDEXED_EXTENSIONS = {".md", ".mdx", ".rst", ".txt", ".yaml", ".yml", ".toml"}
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__",
-             ".codicil", "dist", "build", ".mypy_cache", ".pytest_cache"}
+             ".codicil", "dist", "build", ".mypy_cache", ".pytest_cache", ".serena"}
 
 MAX_CHUNK = 1500   # chars per chunk
 OVERLAP   = 150    # overlap between consecutive chunks
