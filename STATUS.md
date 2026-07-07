@@ -66,9 +66,11 @@ a working `query_docs` tool that answers correctly in an MCP client.
   README.md chunks scored higher (0.662, 0.657) on keyword overlap. Confirmed known
   limitation also holds live: query *"CI setup"* reranked identically to raw order, since
   `_extract_keywords` drops `"CI"` (≤2 chars), leaving only `"setup"` as signal.
-  Side discovery during validation, not yet fixed: `.serena/project.yml` gets indexed (matches
-  `.yml` in `INDEXED_EXTENSIONS`; `.serena` isn't in `SKIP_DIRS`) and surfaces in real query
-  results — tool metadata being treated as project documentation.
+  Side discovery during validation, fixed in PR #15: `.serena/project.yml` was getting indexed
+  (matched `.yml` in `INDEXED_EXTENSIONS`; `.serena` wasn't in `SKIP_DIRS`) and surfacing in
+  real query results — tool metadata being treated as project documentation. Added `.serena`
+  to `SKIP_DIRS`; verified fixed by rebuilding the real index (8 files/44 chunks → 6 files/37
+  chunks) and re-running the same query — `.serena` no longer appears.
 
 ### Open issues (candidates for GitHub issues)
 1. ~~Ranking wobble on vague/short queries~~ — mitigated and validated against real
@@ -80,22 +82,21 @@ a working `query_docs` tool that answers correctly in an MCP client.
    the summary moved to stdout so it's independent of the warning stream (PR #9).
 4. ~~Hardcoded relevance threshold~~ — done. `CODICIL_MIN_SCORE` (default 0.5).
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
-6. **`.serena/project.yml` gets indexed.** Discovered during real-embedding validation
-   (2026-07-07) — it matches `.yml` in `INDEXED_EXTENSIONS` and `.serena` isn't in
-   `SKIP_DIRS`, so tool metadata (not project documentation) surfaces in real query results.
-   Not yet fixed.
+6. ~~`.serena/project.yml` gets indexed~~ — done (PR #15). Added `.serena` to `SKIP_DIRS`.
 
 ## Git
-- 14 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
+- 18 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
   (gitignore update) → `fb54d07` (setup docs + CI, PR #1) → `2ba04a6` (STATUS.md refresh,
   PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4) → `bd37d6c`
   (STATUS.md refresh, PR #5) → `6421ce0` (embed-warning consolidation, PR #6) → `557b8e2`
   (README wording fix, PR #7) → `669d6d6` (STATUS.md refresh, PR #8) → `6bd2dca` (index
   summary to stdout, PR #9) → `2c305bc` (STATUS.md refresh, PR #10) → `d0339a6`
-  (keyword-overlap reranking, PR #11).
+  (keyword-overlap reranking, PR #11) → `58fb5e3` (STATUS.md refresh, PR #12) → `d830c34`
+  (STATUS.md refresh, PyPI publish, PR #13) → `e92a30f` (real-embedding rerank validation,
+  PR #14) → `3860b87` (exclude .serena from indexing, PR #15).
 - Remote: `origin` → `git@github.com:colehellman/codicil.git`, public, default branch `main`.
 - Standing process: every change lands via branch → PR → review → fix findings → squash-merge
-  → pull, no direct commits to `main` (established this session, PRs #1–#11 all followed it).
+  → pull, no direct commits to `main` (established this session, PRs #1–#15 all followed it).
 - Open branch, no PR yet: `blog-draft` — see below.
 
 ## Next steps (agreed sequence)
