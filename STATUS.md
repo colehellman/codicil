@@ -54,24 +54,36 @@ a working `query_docs` tool that answers correctly in an MCP client.
   the embed-failure warning, so there was no way to silence the warning without also losing
   the summary. Verified end-to-end: `codicil index . 2>/dev/null` now still prints the
   summary; `codicil index . 1>/dev/null` shows only the warning.
-- ⚠️ **Ranking-wobble mitigated, not fully validated** (PR #11) — `query_docs` had no
-  reranking step at all; now widens the candidate pool and blends embedding score with a
+- ✅ **Ranking-wobble mitigation validated against real embeddings** (PR #11, validated
+  2026-07-07) — `query_docs` widens the candidate pool and blends embedding score with a
   keyword-overlap signal (`KEYWORD_RERANK_WEIGHT = 0.05`) before truncating to the requested
-  count. Two regression tests with hand-crafted vectors confirm the mechanism: it corrects
-  the exact measured margin (0.598 vs 0.611) and doesn't override a genuinely larger
-  embedding-score gap (0.9 vs 0.55). **Not verified against the real measured wobble** — no
-  reachable embedding host in this environment, and the test suite's `fake_vec` fixture is a
-  hash with no semantic meaning. Also a no-op for queries with no token longer than 2 chars
-  (e.g. a bare acronym) — `_extract_keywords` yields no keyword signal in that case.
+  count. Originally shipped with only synthetic-vector tests (no reachable embedding host at
+  the time); since validated live with real Ollama + `nomic-embed-text` on this repo's own
+  docs. Observed real effects: query *"atomic swap reindexing safety"* had a raw embedding
+  gap of 0.602 vs 0.594 (CLAUDE.md over README.md) — comparable in scale to the original
+  measured wobble (0.611 vs 0.598) — and reranking flipped the order to README.md first.
+  Query *"how does it handle failures"* pulled STATUS.md (raw score 0.649) above two
+  README.md chunks scored higher (0.662, 0.657) on keyword overlap. Confirmed known
+  limitation also holds live: query *"CI setup"* reranked identically to raw order, since
+  `_extract_keywords` drops `"CI"` (≤2 chars), leaving only `"setup"` as signal.
+  Side discovery during validation, not yet fixed: `.serena/project.yml` gets indexed (matches
+  `.yml` in `INDEXED_EXTENSIONS`; `.serena` isn't in `SKIP_DIRS`) and surfaces in real query
+  results — tool metadata being treated as project documentation.
 
 ### Open issues (candidates for GitHub issues)
-1. ~~Ranking wobble on vague/short queries~~ — mitigated (PR #11, see above), but not
-   verified against a real embedding host. Revisit if the wobble still shows up in practice.
+1. ~~Ranking wobble on vague/short queries~~ — mitigated and validated against real
+   embeddings (see above). Known residual gap: acronym/2-char-only queries still get no
+   keyword-overlap correction — acceptable tradeoff for a lightweight heuristic, not
+   revisited.
 2. ~~Repo metadata gap~~ — done, description + topics set (see above).
 3. ~~`codicil index` UX rough edge~~ — done. Per-file warning spam consolidated (PR #6) and
    the summary moved to stdout so it's independent of the warning stream (PR #9).
 4. ~~Hardcoded relevance threshold~~ — done. `CODICIL_MIN_SCORE` (default 0.5).
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
+6. **`.serena/project.yml` gets indexed.** Discovered during real-embedding validation
+   (2026-07-07) — it matches `.yml` in `INDEXED_EXTENSIONS` and `.serena` isn't in
+   `SKIP_DIRS`, so tool metadata (not project documentation) surfaces in real query results.
+   Not yet fixed.
 
 ## Git
 - 14 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
