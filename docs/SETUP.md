@@ -1,12 +1,23 @@
 # Setup
 
-## Prerequisites
+## Install (just want to use it)
+
+```bash
+pip install codicil
+codicil index .
+codicil serve .
+```
+
+That's it — see [Configuration](#configuration) below for env vars, or `README.md` for what
+it does. Everything below this is for building/testing/contributing to Codicil itself.
+
+## Prerequisites (for contributing)
 
 **Python 3.11.** `pyproject.toml` declares `>=3.10`, but this repo only tests and supports
 3.11 — `chromadb` wheels are unreliable on other versions. The project's own development venv
 runs 3.11.15.
 
-## Install
+## Install from source
 
 ```bash
 python3.11 -m venv .venv
