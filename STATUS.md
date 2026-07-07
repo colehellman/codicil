@@ -1,6 +1,6 @@
 # Codicil — Status & Handoff
 
-_Last updated: 2026-07-06. This is a working handoff note, not marketing — see `README.md` for the pitch._
+_Last updated: 2026-07-07. This is a working handoff note, not marketing — see `README.md` for the pitch._
 
 ## Where it stands: Milestone 1 (prove the idea) — complete
 
@@ -29,7 +29,11 @@ a working `query_docs` tool that answers correctly in an MCP client.
 - ✅ **Packaging**: `python -m build` produces a clean sdist + wheel off current `main` —
   verified the sdist contains only `src/`, `tests/`, and Hatch's always-included metadata
   files (fixed a real leak of `.claude/settings.local.json`, `.mcp.json`, `CLAUDE.md`,
-  `STATUS.md`, `.github/` in PR #3). **Not yet uploaded to PyPI** — build-only so far.
+  `STATUS.md`, `.github/` in PR #3).
+- ✅ **Published to PyPI**: `codicil 0.1.0` is live — verified via the PyPI JSON API
+  (`https://pypi.org/pypi/codicil/json` returns `name: codicil`, `version: 0.1.0`), page at
+  `pypi.org/project/codicil/0.1.0/`. Both the sdist and wheel passed `twine check` before
+  upload. `pip install codicil` now works for anyone, not just from-source installs.
 - ⚠️ Semantic path (real embeddings via remote Ollama, `nomic-embed-text`) was verified in an
   earlier session per prior notes, not re-verified since.
 - ✅ **Embed-failure warning noise fixed** (PR #6) — `index_repo` used to print one identical
@@ -93,9 +97,7 @@ a working `query_docs` tool that answers correctly in an MCP client.
      exists on pushed branch `blog-draft` — deliberately not opened as a PR yet (this repo is
      public, so a PR would expose the draft before it's been read/approved). Waiting on
      read-through before opening the PR.
-   - **PyPI publish not done.** Build-only verified (see above) — actual upload needs a PyPI
-     API token and explicit go-ahead; name `codicil` was checked available in an earlier
-     session (404 on the JSON API), not re-verified since.
+   - ~~PyPI publish~~ — done. `codicil 0.1.0` published and verified live (see above).
 
 ## Positioning (don't drift)
 Sharp, differentiated, reliability-first tool + portfolio piece. The "AI memory" category is
