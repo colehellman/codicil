@@ -24,7 +24,11 @@ def main() -> None:
     p_serve.add_argument("path", nargs="?", default=".", help="Repository path (default: current dir).")
 
     p_query = sub.add_parser("query", help="Search the indexed docs and print matching passages.")
-    p_query.add_argument("query", nargs="+", help="Natural-language question or keywords.")
+    p_query.add_argument(
+        "query", nargs="+",
+        help="Natural-language question or keywords. If it starts with '-', "
+             "put '--' before it, e.g. `codicil query -- -Wall flag not working`.",
+    )
     p_query.add_argument("--repo", dest="path", default=".", help="Repository path (default: current dir).")
     p_query.add_argument("--n-results", type=int, default=5, help="Passages to return, 1-10 (default: 5).")
 
