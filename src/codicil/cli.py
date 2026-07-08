@@ -1,7 +1,8 @@
-"""Codicil command-line interface: `codicil index` and `codicil serve`."""
+"""Codicil command-line interface: `codicil index`, `codicil serve`, and `codicil query`."""
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -21,6 +22,11 @@ def main() -> None:
 
     p_serve = sub.add_parser("serve", help="Run the MCP server for this repository.")
     p_serve.add_argument("path", nargs="?", default=".", help="Repository path (default: current dir).")
+
+    p_query = sub.add_parser("query", help="Search the indexed docs and print matching passages.")
+    p_query.add_argument("query", nargs="+", help="Natural-language question or keywords.")
+    p_query.add_argument("--repo", dest="path", default=".", help="Repository path (default: current dir).")
+    p_query.add_argument("--n-results", type=int, default=5, help="Passages to return, 1-10 (default: 5).")
 
     args = parser.parse_args()
 
@@ -42,6 +48,11 @@ def main() -> None:
         )
     elif args.command == "serve":
         server.serve()
+    elif args.command == "query":
+        if server.collection.count() == 0:
+            print(f"codicil: index empty — building from {repo} …", file=sys.stderr)
+            server.index_repo()
+        print(server.query_docs(" ".join(args.query), n_results=args.n_results))
 
 
 if __name__ == "__main__":
