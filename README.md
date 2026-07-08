@@ -1,5 +1,9 @@
 # Codicil
 
+[![Tests](https://github.com/colehellman/codicil/actions/workflows/test.yml/badge.svg)](https://github.com/colehellman/codicil/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/codicil)](https://pypi.org/project/codicil/)
+[![License: MIT](https://img.shields.io/github/license/colehellman/codicil)](LICENSE)
+
 **Give your AI coding assistant durable memory of your engineering knowledge.**
 
 > *A codicil is a binding addition to a will: knowledge appended to a document that carries authority and outlives the moment it was written.*
