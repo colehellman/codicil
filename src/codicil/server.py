@@ -6,6 +6,7 @@ every query degrades to a pure-Python keyword search over the same files (grep_f
 — an index that can't answer semantically is never a dead end.
 """
 
+import atexit
 import functools
 import json
 import os
@@ -80,6 +81,46 @@ def _synchronized(fn):
         with _index_lock:
             return fn(*args, **kwargs)
     return wrapper
+
+
+# ChromaDB's PersistentClient does not support concurrent access from separate OS
+# processes (a second process opening a store already held open by another can crash
+# it) — the in-process _index_lock above can't protect against that. This PID-file
+# guard is the cross-process counterpart: `serve()` claims it, one-shot CLI commands
+# (index/query) check it before touching the store.
+PID_FILE = STORE_PATH / "server.pid"
+
+
+def _live_server_pid() -> int | None:
+    """PID of a running `codicil serve` for this store, or None. A pidfile left behind
+    by a server that didn't exit cleanly (crash, kill -9) is treated as stale and removed."""
+    if not PID_FILE.exists():
+        return None
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except (ValueError, OSError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        PID_FILE.unlink(missing_ok=True)
+        return None
+    except PermissionError:
+        return pid  # owned by another user; can't confirm further, treat as live
+    return pid
+
+
+def refuse_if_server_running() -> None:
+    """Exit if a `codicil serve` already owns this store. Call before any one-shot CLI
+    command (index/query) touches Chroma directly, instead of racing the live server."""
+    pid = _live_server_pid()
+    if pid is not None:
+        sys.exit(
+            f"codicil: a server is already running for this repo (pid {pid}). ChromaDB "
+            "does not support concurrent multi-process access to the same store. Use the "
+            "running server's `reindex_docs`/`query_docs` MCP tools instead of a separate "
+            "`codicil index`/`codicil query` process."
+        )
 
 
 def is_indexed_file(path: Path) -> bool:
@@ -406,6 +447,12 @@ def reindex_docs(force: bool = False) -> str:
 
 def serve() -> None:
     """Build the index if empty, then run the MCP server (called by `codicil serve`)."""
+    existing = _live_server_pid()
+    if existing is not None:
+        sys.exit(f"codicil: a server is already running for this repo (pid {existing}).")
+    PID_FILE.write_text(str(os.getpid()))
+    atexit.register(PID_FILE.unlink, missing_ok=True)
+
     if collection.count() == 0:
         print(f"codicil: index empty — building from {REPO_PATH} …", file=sys.stderr)
         try:
