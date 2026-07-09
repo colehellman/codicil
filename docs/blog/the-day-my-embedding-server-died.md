@@ -17,10 +17,9 @@ and the endpoint just stopped answering.
 
 **Nothing broke.**
 
-Queries kept coming back. Answers kept being useful. For weeks, nobody — including me —
-noticed the semantic layer was gone. Every question was quietly being answered by keyword
-search over the same files instead, and the tool never said otherwise unless you went
-looking.
+Queries kept coming back. Answers kept being useful. For weeks, I didn't notice the semantic
+layer was gone. Every question was quietly being answered by keyword search over the same
+files instead, and the tool never said otherwise unless I went looking.
 
 ## Why that's the interesting part
 
