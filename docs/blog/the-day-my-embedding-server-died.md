@@ -1,4 +1,4 @@
-# The Day My Embedding Server Died and Nobody Noticed
+# The Day My Embedding Server Died and I Didn't Notice
 
 _Draft — not yet published anywhere. Written for review before it goes out._
 
@@ -8,9 +8,11 @@ passages to an AI coding assistant on request. It's not a big system. It has one
 answer "how does X work?" from what's already written down, instead of making the assistant
 guess.
 
-For months it ran against a real embedding host — a local Ollama instance serving
-`nomic-embed-text` — turning every doc into vectors and every query into a semantic search
-over them.
+Codicil started life as a bespoke tool wired into my homelab — a self-hosted stack of
+Proxmox, Docker, and a dozen other services I run at home — before I pulled it out into its
+own package. For months, running inside that homelab, it worked against a real embedding
+host — a local Ollama instance serving `nomic-embed-text` — turning every doc into vectors
+and every query into a semantic search over them.
 
 Then the embedding server was retired. A host got decommissioned in some unrelated cleanup,
 and the endpoint just stopped answering.
@@ -40,8 +42,13 @@ still returns something useful:
   just "nothing."
 - **A re-index gets interrupted halfway?** New chunks are embedded *before* the old ones are
   deleted, so a crash mid-reindex leaves you with stale data, never empty data.
-- **Two things try to touch the index at once?** Everything funnels through a single lock —
-  there's no "corrupted index from a race" failure mode to debug at 2am.
+- **Two things try to touch the index at once, in the same process?** Serialized through a
+  single lock — no corrupted-index-from-a-race failure mode to debug at 2am.
+- **Two things try to touch the index at once, in *separate* processes** (a long-running
+  server and a one-shot reindex from a cron job or hook)? That one actually bit me: it's the
+  same failure mode described above, just at the process level instead of the thread level,
+  and it wasn't guarded against for a while. A PID-file check now refuses the second process
+  outright instead of letting it race the first into a crash.
 
 None of these are exotic. They're the kind of decision that feels like overengineering right
 up until the day the thing you depended on quietly stops existing — and then it's the only
