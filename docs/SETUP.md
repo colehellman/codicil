@@ -11,11 +11,12 @@ codicil serve .
 That's it — see [Configuration](#configuration) below for env vars, or `README.md` for what
 it does. Everything below this is for building/testing/contributing to Codicil itself.
 
-## Prerequisites (for contributing)
+## Requirements
 
-**Python 3.11.** `pyproject.toml` declares `>=3.10`, but this repo only tests and supports
-3.11 — `chromadb` wheels are unreliable on other versions. The project's own development venv
-runs 3.11.15.
+- Python 3.11 or newer. The published package metadata requires `>=3.11`.
+- A Unix-like operating system. The local-store ownership guard uses `fcntl` advisory locks.
+- Optional: an Ollama-compatible service implementing `POST /api/embeddings` for semantic
+  search. It is not needed for installation, tests, or keyword fallback.
 
 ## Install from source
 
@@ -24,72 +25,110 @@ python3.11 -m venv .venv
 ./.venv/bin/pip install -e ".[dev]"
 ```
 
-This installs the core dependencies (`chromadb`, `httpx`, `mcp`) plus `pytest` for the test
-suite, and registers the `codicil` console script (`codicil = "codicil.cli:main"`).
-
-Verify:
+The editable install provides the `codicil` command. Verify both the install and offline test
+suite:
 
 ```bash
 ./.venv/bin/codicil --version
 ./.venv/bin/python -m pytest -q
 ```
 
-The test suite runs fully offline — `embed()`/`embed_many()` are mocked, so no embedding host
-is required to get a green run.
+Tests replace the embedding functions with deterministic vectors and never require an embedding
+host.
 
-## Indexing and serving
-
-```bash
-./.venv/bin/codicil index .     # build/update the local index for the current repo
-./.venv/bin/codicil serve .     # run the MCP server for the current repo
-```
-
-Both subcommands take an optional `path` argument (default: current directory).
-`index` also accepts `--force`, which reindexes every file, ignoring recorded modification
-times (normal runs are incremental — only files whose mtime changed are re-embedded).
-
-Running `index` first is not required: `serve` builds the index itself on startup if it's
-empty. Run `index` explicitly when you want to see indexed/skipped counts up front, or to
-force a full reindex before starting the server.
-
-## Configuration
-
-All configuration is read from the environment at import time. Defaults work out of the box
-with no setup. (This table mirrors the one in `CLAUDE.md` — keep both in sync if defaults
-change in `server.py`.)
-
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `CODICIL_REPO` | `.` | Repo to index (the CLI sets this from its `path` argument). |
-| `CODICIL_STORE` | `<repo>/.codicil` | Where the local Chroma index + state live (gitignored). |
-| `CODICIL_EMBED_URL` | `http://localhost:11434` | Ollama-compatible embeddings endpoint. |
-| `CODICIL_EMBED_MODEL` | `nomic-embed-text` | Embedding model. |
-| `CODICIL_EMBED_WORKERS` | `3` | Concurrent embed requests during indexing. |
-| `CODICIL_MIN_SCORE` | `0.5` | Minimum similarity (0–1) for a passage to be returned. |
-
-### Two retrieval paths, same tool call
-
-- **Semantic path** — if `CODICIL_EMBED_URL` points at a reachable Ollama-compatible host and
-  the index has embedded chunks, `query_docs` ranks results by embedding similarity and drops
-  anything below `CODICIL_MIN_SCORE`.
-- **Fallback path** — if the embed host is unreachable, or the index is empty, `query_docs`
-  transparently falls back to keyword search read straight off disk. Same tool, same call
-  signature, no configuration change required. This is the project's core reliability
-  guarantee — see `CLAUDE.md` → "Reliability invariants" if you're modifying indexing or
-  retrieval code.
-
-## Using with Claude Code
-
-The committed `.mcp.json` launches the server with no embed URL override, so it defaults to
-`localhost:11434` — with no local Ollama running, it operates in fallback (keyword) mode.
-
-To dogfood the semantic path against a remote Ollama host, export an override in your shell
-*before* launching Claude Code (stdio MCP servers inherit the parent process's environment):
+## Index a Repository
 
 ```bash
-export CODICIL_EMBED_URL=http://<your-ollama-host>:11434
-claude
+./.venv/bin/codicil index /path/to/repository
 ```
 
-**Do not** put a private or tailnet hostname into the committed `.mcp.json` or any tracked
-file — this repo is public. Keep the committed default as `localhost`.
+The command scans supported documentation files, sends chunks to the configured embedding host,
+and writes local state under `/path/to/repository/.codicil` unless `CODICIL_STORE` is set. A
+successful repeat run embeds only files whose modification time changed. Use `--force` to
+re-embed all supported files:
+
+```bash
+./.venv/bin/codicil index --force /path/to/repository
+```
+
+If the embedding endpoint is unavailable, indexing reports skipped files. This does not prevent
+the server from answering keyword fallback queries over the current files.
+
+## Run the MCP Server
+
+```bash
+./.venv/bin/codicil serve /path/to/repository
+```
+
+The server uses stdio, so it is normally launched by an MCP client rather than directly in an
+interactive terminal. When its model-specific index is empty, startup attempts an initial
+index. To refresh an index while the server is running, call the `reindex_docs` MCP tool.
+
+Do not run `codicil index` against the same store while `serve` is running. The second process
+is rejected to prevent Chroma and index-state races.
+
+## Claude Code Configuration
+
+For a repository that contains a local virtual environment, use:
+
+```json
+{
+  "mcpServers": {
+    "codicil": {
+      "command": ".venv/bin/codicil",
+      "args": ["serve", "."]
+    }
+  }
+}
+```
+
+If Codicil is installed elsewhere, use an absolute executable path. The `.` argument is resolved
+by the process's working directory, so replace it with an absolute repository path if your MCP
+client does not start in the intended repository.
+
+## Configure Semantic Search
+
+The defaults target a local Ollama-compatible server:
+
+```bash
+export CODICIL_EMBED_URL=http://localhost:11434
+export CODICIL_EMBED_MODEL=nomic-embed-text
+./.venv/bin/codicil index /path/to/repository
+```
+
+`nomic` model names receive `search_document:` and `search_query:` prefixes automatically. If
+you change `CODICIL_EMBED_MODEL`, Codicil uses a different Chroma collection and state file.
+Run the indexer once for that new model before expecting semantic results.
+
+All environment variables must be available before the server starts. Stdio MCP processes inherit
+the environment of the client that launches them.
+
+## Configuration Reference
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODICIL_REPO` | `.` | Repository path. CLI commands set it from their positional path. |
+| `CODICIL_STORE` | `<repo>/.codicil` | Directory for Chroma collections, model-specific state, and the lock file. |
+| `CODICIL_EMBED_URL` | `http://localhost:11434` | Ollama-compatible embeddings base URL. |
+| `CODICIL_EMBED_MODEL` | `nomic-embed-text` | Model passed to the embedding API. |
+| `CODICIL_EMBED_WORKERS` | `3` | Number of concurrent requests used when indexing. |
+| `CODICIL_MIN_SCORE` | `0.5` | Minimum semantic score for a returned passage. |
+
+## Fallback Behavior
+
+`query_docs` has two modes:
+
+1. Semantic retrieval, when the selected collection contains chunks and the embedding endpoint
+   returns a query vector.
+2. Keyword fallback, when the endpoint is unreachable or that collection is empty.
+
+Fallback reads supported files directly from disk, so it can surface documents added after the
+last semantic index. It performs literal keyword matching, not semantic matching.
+
+## Privacy and Store Management
+
+The default configuration keeps vectors and state local. A remote embedding URL receives the
+indexed chunks and queries, so use only an endpoint appropriate for the repository's data.
+
+To discard every local index for a repository, stop all Codicil processes and remove its store
+directory. This is destructive; a later index rebuilds only from the repository's current files.

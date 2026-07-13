@@ -6,12 +6,13 @@ every query degrades to a pure-Python keyword search over the same files (grep_f
 — an index that can't answer semantically is never a dead end.
 """
 
-import atexit
 import functools
+import hashlib
 import json
 import os
 import sys
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -64,14 +65,35 @@ KEYWORD_RERANK_WEIGHT = 0.05
 # ---------------------------------------------------------------------------
 
 STORE_PATH.mkdir(parents=True, exist_ok=True)
-STATE_FILE = STORE_PATH / "index_state.json"
+# Keep indexes for different embedding models separate. Chroma fixes a collection's
+# vector dimension on its first write, so reusing one collection across models can
+# otherwise make a model change permanently unindexable.
+_MODEL_KEY = hashlib.sha256(EMBED_MODEL.encode("utf-8")).hexdigest()[:12]
+COLLECTION_NAME = f"docs_{_MODEL_KEY}"
+STATE_FILE = STORE_PATH / f"index_state_{_MODEL_KEY}.json"
+
+# Chroma's persistent client and the JSON state file are process-local resources.
+# Hold an exclusive advisory lock for this server/CLI process so a hook or a second
+# command cannot mutate the same store concurrently.
+try:
+    import fcntl
+except ImportError as e:  # pragma: no cover - Codicil currently supports Unix hosts.
+    raise RuntimeError("Codicil requires a Unix advisory-lock implementation.") from e
+
+_store_lock_file = (STORE_PATH / "store.lock").open("a+")
+try:
+    fcntl.flock(_store_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError as e:
+    raise RuntimeError(
+        f"Codicil store is already in use: {STORE_PATH}. "
+        "Stop the other codicil process before starting another one."
+    ) from e
 
 chroma = chromadb.PersistentClient(path=str(STORE_PATH / "chroma"))
-collection = chroma.get_or_create_collection("docs", metadata={"hnsw:space": "cosine"})
+collection = chroma.get_or_create_collection(COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
-# ChromaDB's PersistentClient is not safe for concurrent access — a single reentrant
-# lock serializes every index write and every query so a live query never races a
-# reindex. Reentrant so a synchronized query tool can call a synchronized indexer.
+# The process lock above protects separate CLI/server instances. This lock serializes
+# threads within the owning process and is reentrant for indexer calls from MCP tools.
 _index_lock = threading.RLock()
 
 
@@ -81,46 +103,6 @@ def _synchronized(fn):
         with _index_lock:
             return fn(*args, **kwargs)
     return wrapper
-
-
-# ChromaDB's PersistentClient does not support concurrent access from separate OS
-# processes (a second process opening a store already held open by another can crash
-# it) — the in-process _index_lock above can't protect against that. This PID-file
-# guard is the cross-process counterpart: `serve()` claims it, one-shot CLI commands
-# (index/query) check it before touching the store.
-PID_FILE = STORE_PATH / "server.pid"
-
-
-def _live_server_pid() -> int | None:
-    """PID of a running `codicil serve` for this store, or None. A pidfile left behind
-    by a server that didn't exit cleanly (crash, kill -9) is treated as stale and removed."""
-    if not PID_FILE.exists():
-        return None
-    try:
-        pid = int(PID_FILE.read_text().strip())
-    except (ValueError, OSError):
-        return None
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        PID_FILE.unlink(missing_ok=True)
-        return None
-    except PermissionError:
-        return pid  # owned by another user; can't confirm further, treat as live
-    return pid
-
-
-def refuse_if_server_running() -> None:
-    """Exit if a `codicil serve` already owns this store. Call before any one-shot CLI
-    command (index/query) touches Chroma directly, instead of racing the live server."""
-    pid = _live_server_pid()
-    if pid is not None:
-        sys.exit(
-            f"codicil: a server is already running for this repo (pid {pid}). ChromaDB "
-            "does not support concurrent multi-process access to the same store. Use the "
-            "running server's `reindex_docs`/`query_docs` MCP tools instead of a separate "
-            "`codicil index`/`codicil query` process."
-        )
 
 
 def is_indexed_file(path: Path) -> bool:
@@ -328,11 +310,15 @@ def index_repo(force: bool = False) -> tuple[int, int]:
         except Exception as e:
             print(f"codicil: skipping {path} — {e}", file=sys.stderr)
             continue
-        if not text.strip():
-            continue
-
         chunks = chunk(text, rel)
         if not chunks:
+            # An intentionally empty or tiny document supersedes any indexed version.
+            # Record its mtime so normal incremental runs do not repeatedly process it.
+            existing = collection.get(where={"source": rel})
+            if existing["ids"]:
+                collection.delete(ids=existing["ids"])
+            state[rel] = mtime
+            indexed += 1
             continue
 
         # Embed FIRST, then swap. Deleting a file's old chunks before a possibly
@@ -350,15 +336,20 @@ def index_repo(force: bool = False) -> tuple[int, int]:
             skipped += 1
             continue
 
+        # Add a new generation before deleting the old one. `collection.add()` can
+        # fail after embedding (for example, disk or schema errors); retaining the
+        # old generation preserves the reliability invariant in that case too.
         existing = collection.get(where={"source": rel})
-        if existing["ids"]:
-            collection.delete(ids=existing["ids"])
+        old_ids = existing["ids"]
+        generation = uuid.uuid4().hex
         collection.add(
-            ids=[f"{rel}::{i}" for i in range(len(chunks))],
+            ids=[f"{rel}::{generation}::{i}" for i in range(len(chunks))],
             embeddings=embeddings,
             documents=chunks,
             metadatas=[{"source": rel, "chunk": i} for i in range(len(chunks))],
         )
+        if old_ids:
+            collection.delete(ids=old_ids)
         state[rel] = mtime
         indexed += 1
 
@@ -447,12 +438,6 @@ def reindex_docs(force: bool = False) -> str:
 
 def serve() -> None:
     """Build the index if empty, then run the MCP server (called by `codicil serve`)."""
-    existing = _live_server_pid()
-    if existing is not None:
-        sys.exit(f"codicil: a server is already running for this repo (pid {existing}).")
-    PID_FILE.write_text(str(os.getpid()))
-    atexit.register(PID_FILE.unlink, missing_ok=True)
-
     if collection.count() == 0:
         print(f"codicil: index empty — building from {REPO_PATH} …", file=sys.stderr)
         try:

@@ -3,7 +3,7 @@ name = "codicil"
 version = "0.1.0"
 description = "Durable, searchable memory of your engineering docs for AI coding assistants."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Cole Hellman" }]
 keywords = ["mcp", "rag", "llm", "claude", "documentation", "semantic-search"]

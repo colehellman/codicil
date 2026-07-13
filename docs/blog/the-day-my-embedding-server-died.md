@@ -47,8 +47,8 @@ still returns something useful:
 - **Two things try to touch the index at once, in *separate* processes** (a long-running
   server and a one-shot reindex from a cron job or hook)? That one actually bit me: it's the
   same failure mode described above, just at the process level instead of the thread level,
-  and it wasn't guarded against for a while. A PID-file check now refuses the second process
-  outright instead of letting it race the first into a crash.
+  and it wasn't guarded against for a while. An exclusive advisory lock now refuses the second
+  process outright instead of letting it race the first into a crash.
 
 None of these are exotic. They're the kind of decision that feels like overengineering right
 up until the day the thing you depended on quietly stops existing — and then it's the only

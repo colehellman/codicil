@@ -43,7 +43,6 @@ def main() -> None:
     from . import server  # imported after CODICIL_REPO is set
 
     if args.command == "index":
-        server.refuse_if_server_running()
         indexed, skipped = server.index_repo(force=args.force)
         # Informational, not a warning — stdout, so `2>/dev/null` silences the
         # embed-failure warning without also hiding this summary.
@@ -54,7 +53,6 @@ def main() -> None:
     elif args.command == "serve":
         server.serve()
     elif args.command == "query":
-        server.refuse_if_server_running()
         if server.collection.count() == 0:
             print(f"codicil: index empty — building from {repo} …", file=sys.stderr)
             server.index_repo()
