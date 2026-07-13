@@ -19,8 +19,8 @@ a working `query_docs` tool that answers correctly in an MCP client.
   returning fresh results pulled straight off disk (verified by seeing files created *during
   the session itself* show up in a query result — proves it's reading current state, not a
   stale or mocked index).
-- ✅ **Test suite:** fully offline, including regressions for embed/write-safe swaps,
-  empty-file removal, and cross-process store ownership.
+- ✅ **Test suite: 20 passing, fully offline** (`pytest -q`), including regressions for
+  embed/write-safe swaps, empty-file removal, and cross-process store ownership.
 - ✅ **CI**: GitHub Actions running the test suite on `ubuntu-latest` / Python 3.11, passing
   on every merged PR so far (#1–#4).
 - ✅ **Public GitHub repo**: `github.com/colehellman/codicil`, confirmed public
