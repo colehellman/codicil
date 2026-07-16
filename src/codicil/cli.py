@@ -40,7 +40,13 @@ def main() -> None:
     # server.py reads config from the environment at import time.
     os.environ["CODICIL_REPO"] = str(repo)
 
-    from . import server  # imported after CODICIL_REPO is set
+    # Importing server.py acquires the store's advisory lock; it raises RuntimeError
+    # instead of exiting itself so non-CLI importers (tests, MCP clients) get a normal
+    # exception. Turn it into a clean CLI error here rather than a raw traceback.
+    try:
+        from . import server  # imported after CODICIL_REPO is set
+    except RuntimeError as e:
+        sys.exit(f"codicil: {e}")
 
     if args.command == "index":
         indexed, skipped = server.index_repo(force=args.force)
