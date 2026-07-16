@@ -1,6 +1,6 @@
 # Codicil — Status & Handoff
 
-_Last updated: 2026-07-09. This is a working handoff note, not marketing — see `README.md` for the pitch._
+_Last updated: 2026-07-13. This is a working handoff note, not marketing — see `README.md` for the product guide._
 
 ## Where it stands: Milestone 1 (prove the idea) — complete
 
@@ -16,9 +16,11 @@ a working `query_docs` tool that answers correctly in an MCP client.
   the index was confirmed empty (`.codicil/index_state.json` was `{}`).
 - ✅ **Live loop inside Claude Code, end-to-end** — `mcp__codicil__query_docs` and
   `mcp__codicil__reindex_docs` confirmed live and callable from a real Claude Code session,
-  returning fresh results pulled straight off disk.
-- ✅ **Test suite: 12 passing, fully offline** (`pytest -q`), including the headline
-  invariant `test_failed_reindex_preserves_old_chunks`.
+  returning fresh results pulled straight off disk (verified by seeing files created *during
+  the session itself* show up in a query result — proves it's reading current state, not a
+  stale or mocked index).
+- ✅ **Test suite: 20 passing, fully offline** (`pytest -q`), including regressions for
+  embed/write-safe swaps, empty-file removal, and cross-process store ownership.
 - ✅ **CI**: GitHub Actions running the test suite on `ubuntu-latest` / Python 3.11, passing
   on every merged PR so far (#1–#4).
 - ✅ **Public GitHub repo**: `github.com/colehellman/codicil`, confirmed public
@@ -76,21 +78,13 @@ a working `query_docs` tool that answers correctly in an MCP client.
   before merging: the Tests badge SVG returns `200`/`image/svg+xml` and reflects the passing
   workflow, the PyPI badge renders `v0.1.0`, the license badge renders `MIT`, and both link
   targets (workflow page, PyPI project page) return `200`.
-- ✅ **Cross-process store-access guard added** (PR #20) — `_index_lock` only serializes
+- ✅ **Cross-process store-access guard added** — `_index_lock` only serializes
   access *within* one process; a separate `codicil index`/`codicil query` racing an
   already-running `codicil serve` against the same store could crash it (the same failure
-  mode that hit the bespoke predecessor this project was extracted from). Added a PID-file
-  guard: `serve()` claims `<store>/server.pid` on start and refuses a second server on the
-  same store; `index`/`query` check it first via `refuse_if_server_running()` and exit with
-  a pointer to the MCP tools instead of racing the live server. Verified end-to-end with
-  real separate processes (not mocks): started `codicil serve` with stdin held open,
-  confirmed a concurrent `codicil index` and `codicil query` both refuse; `kill`'d the
-  server (plain SIGTERM, which doesn't run `atexit`) and confirmed the stale pidfile it left
-  behind is detected as dead via `os.kill(pid, 0)` and cleared automatically on the next
-  run. Test suite: 26 passing (17 prior + 9 new in `tests/test_concurrency_guard.py`). Known
-  residual gap, left unaddressed to keep this small: no mutual exclusion between two
-  simultaneous one-shot CLI invocations when no server is running — would need a true
-  `fcntl.flock`-based lock, platform-specific complexity not justified by likelihood.
+  mode that hit the bespoke predecessor this project was extracted from). An exclusive
+  `fcntl.flock` now protects the entire store for the lifetime of the owning process, so a
+  second `serve`, `index`, or `query` process is refused before opening Chroma. This also
+  covers concurrent one-shot commands without stale-PID cleanup.
 
 ### Open issues (candidates for GitHub issues)
 1. ~~Ranking wobble on vague/short queries~~ — mitigated and validated against real
@@ -103,9 +97,8 @@ a working `query_docs` tool that answers correctly in an MCP client.
 4. ~~Hardcoded relevance threshold~~ — done. `CODICIL_MIN_SCORE` (default 0.5).
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
 6. ~~`.serena/project.yml` gets indexed~~ — done (PR #15). Added `.serena` to `SKIP_DIRS`.
-7. ~~Cross-process concurrent access to the Chroma store~~ — done (PR #20). This is the gap
-   PR #7 narrowed the README's claim around (`_synchronized` only ever guaranteed in-process
-   serialization); now closed by a PID-file guard — see above.
+7. ~~Cross-process concurrent access to the Chroma store~~ — done. The advisory lock supplements
+   `_synchronized`, which continues to provide only in-process serialization.
 
 ## Git
 - 23 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`

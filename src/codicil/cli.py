@@ -40,10 +40,15 @@ def main() -> None:
     # server.py reads config from the environment at import time.
     os.environ["CODICIL_REPO"] = str(repo)
 
-    from . import server  # imported after CODICIL_REPO is set
+    # Importing server.py acquires the store's advisory lock; it raises RuntimeError
+    # instead of exiting itself so non-CLI importers (tests, MCP clients) get a normal
+    # exception. Turn it into a clean CLI error here rather than a raw traceback.
+    try:
+        from . import server  # imported after CODICIL_REPO is set
+    except RuntimeError as e:
+        sys.exit(f"codicil: {e}")
 
     if args.command == "index":
-        server.refuse_if_server_running()
         indexed, skipped = server.index_repo(force=args.force)
         # Informational, not a warning — stdout, so `2>/dev/null` silences the
         # embed-failure warning without also hiding this summary.
@@ -54,7 +59,6 @@ def main() -> None:
     elif args.command == "serve":
         server.serve()
     elif args.command == "query":
-        server.refuse_if_server_running()
         if server.collection.count() == 0:
             print(f"codicil: index empty — building from {repo} …", file=sys.stderr)
             server.index_repo()

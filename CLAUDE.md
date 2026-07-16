@@ -40,7 +40,7 @@ Tests run fully offline — `embed()`/`embed_many()` are mocked, so no embedding
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `CODICIL_REPO` | `.` | Repo to index (the CLI sets this from its path arg). |
-| `CODICIL_STORE` | `<repo>/.codicil` | Where the Chroma index + state live (gitignored). |
+| `CODICIL_STORE` | `<repo>/.codicil` | Where Chroma collections, model-specific state, and the lock file live (gitignored). |
 | `CODICIL_EMBED_URL` | `http://localhost:11434` | Ollama-compatible embeddings endpoint. |
 | `CODICIL_EMBED_MODEL` | `nomic-embed-text` | Embedding model. Nomic task-prefixes auto-apply. |
 | `CODICIL_EMBED_WORKERS` | `3` | Concurrent embed requests. |
@@ -63,14 +63,19 @@ This repo is public. Localhost defaults only.
 ## Reliability invariants — do not break these
 
 These are the point of the project. If you change indexing or retrieval, keep them intact and
-keep their tests green (`tests/test_index_swap.py`, `tests/test_grep_fallback.py`):
+keep their tests green (`tests/test_index_swap.py`, `tests/test_grep_fallback.py`,
+`tests/test_concurrency_guard.py`):
 
 1. **Degrade, never fail.** No embedding host or empty index → `query_docs` falls back to
    `grep_fallback` off disk. It must never return "nothing" just because embeddings are down.
-2. **Embed-then-swap.** In `index_repo`, embed new chunks *before* deleting a file's old
-   chunks. A failed embed must leave the old index intact — worst case stale, never empty.
+2. **Add-then-swap.** In `index_repo`, embed and add a new generation before deleting a file's
+   old chunks. A failed embed or Chroma write must leave the old index intact — worst case stale,
+   never empty.
 3. **Incremental by mtime.** Only reindex files whose mtime changed.
-4. **Single-writer.** All Chroma access is serialized through `_index_lock` (reentrant).
+4. **Single-writer.** An exclusive store-level advisory lock refuses a second process; the
+   reentrant `_index_lock` serializes access among threads in the owning process.
+5. **Model isolation.** A model name selects its own Chroma collection and state file. Do not
+   collapse them into one collection: embedding dimensions can differ across models.
 
 ## Code style
 
