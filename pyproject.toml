@@ -1,6 +1,6 @@
 [project]
 name = "codicil"
-version = "0.1.0"
+version = "0.2.0"
 description = "Durable, searchable memory of your engineering docs for AI coding assistants."
 readme = "README.md"
 requires-python = ">=3.11"
