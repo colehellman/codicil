@@ -1,84 +1,63 @@
-# The Day My Embedding Server Died and I Didn't Notice
+# My embedding server died and I didn't notice for two weeks
 
-I've got a little MCP server called [Codicil](https://github.com/colehellman/codicil) that
-I use to search my own documentation: runbooks, config notes, the stuff I write down about
-my homelab so I don't have to remember it. It's just for me. One repo, one user, no team,
-nothing shared. An AI coding assistant can ask "how does X work" against my own docs instead
-of guessing.
+I built a small MCP server called [Codicil](https://github.com/colehellman/codicil) that
+indexes docs in a repo and lets an AI coding assistant search them instead of guessing.
+Runbooks, config notes, whatever I've written down about my homelab. It's just for me, one
+repo, one user, nobody else touches it.
 
-It started as something hacked into my actual homelab setup. I've got a small Proxmox +
-Docker stack running at home, and for months this thing ran against a real Ollama instance
-doing embeddings with `nomic-embed-text`. Every doc got turned into vectors, every query was
-a real semantic search.
+For months it ran against a real Ollama box doing embeddings with `nomic-embed-text`, so
+every query was an actual semantic search over vectors. Then I decommissioned that box for
+unrelated reasons and the embedding endpoint went dark.
 
-Then at some point I decommissioned that box. Wasn't even about this project, just general
-cleanup. And the embedding endpoint went quiet.
+I didn't notice for something like two weeks. Queries still came back with reasonable
+answers so I just kept using it. Turns out it had fallen back to grepping the raw files the
+whole time, and it never said a word about it.
 
-Nothing broke, though. That's the part worth sitting with.
+I don't remember exactly what tipped me off at this point, just that at some point I went
+looking and realized it had been running on keyword fallback for a while.
 
-I kept using it. Queries kept coming back with useful answers. It was probably a couple of
-weeks before I even noticed the semantic search wasn't happening anymore, and there was
-never going to be anyone else to notice it first. I'm the only user this thing has. It had
-quietly fallen back to plain keyword matching over the same files, and the only reason I
-found out was that I went looking, not because anything alerted me.
+Honestly my first thought was that this is a little embarrassing. I'm the only person who
+uses this thing, so I'm also the only monitoring it has, and I went two weeks without
+checking. But then I actually looked at why it didn't just break, and that part I don't
+think is embarrassing at all.
 
-## I should probably be embarrassed about that
+Most tools like this have one failure mode when the embedding service goes away: they stop
+working. No embedding, no vector, no search. I didn't want that, so a bunch of the code is
+just "what happens if this specific thing isn't there" handling, scattered around instead of
+centralized:
 
-My first reaction was "how did I not notice my own tool lost half its brain for two weeks."
-But that's not really a surprising failure of monitoring: I'm both the only user and the
-only person who'd ever check. The more interesting part, to me, is that it didn't matter
-that I hadn't checked.
+- No embedding host reachable? Falls back to grepping files off disk directly.
+- Index empty or never built? Same fallback.
+- Reindex dies halfway through a file? New chunks get written before old ones are deleted, so
+  a crash mid-run leaves you stale, not empty.
+- Two processes hit the store at once? This one actually got me for real, not hypothetically.
+  A long-running `serve` process and a one-off `codicil index` from a cron job raced each
+  other and it wasn't pretty. There's an exclusive `fcntl.flock` on the store now
+  (`fcntl.flock(fd, LOCK_EX | LOCK_NB)`), so the second process gets refused outright instead
+  of getting to touch anything.
 
-Most tools like this have exactly one failure mode when the embedding service disappears:
-they just stop working. No embeddings, no search, maybe a stack trace if you're unlucky,
-right when you actually needed the answer.
+None of that is exotic, it's just annoying to write and easy to skip. I skipped some of it
+the first time through, which is how the process-race thing happened.
 
-I'd specifically tried to avoid that when I built this. Not with some elaborate resilience
-framework, just a handful of "okay, what happens if this specific thing isn't there"
-decisions scattered through the code. No embedding host? Fall back to grepping the files
-directly. Index hasn't been built yet? Same fallback, still returns something instead of
-nothing. Reindex dies halfway through? New chunks get written before the old ones are
-deleted, so worst case you're stale, not empty.
+Keyword search is worse than semantic search, for the record. It doesn't get synonyms, it
+just counts overlapping words. If I ran both side by side on the same queries, semantic wins
+most of the time. But it only wins when the embedding host is actually up, and mine wasn't,
+for two weeks, and I didn't know.
 
-The one that actually got me, though (not in theory, for real), was two processes touching
-the index at the same time. A long-running server and a one-off reindex from a cron job,
-say. I hadn't guarded against that for a while, and it's the kind of thing that only bites
-you when it bites you. There's a lock on it now that just refuses the second process outright
-instead of letting them race each other into a corrupted store.
+There's also a dumber bug I found while doing all this that's worth mentioning because it's
+the kind of thing that's obvious in hindsight: each embedding model gets its own Chroma
+collection now (`docs_<sha256-of-model-name>[:12]`), because Chroma fixes a collection's
+vector dimension the first time you write to it. Before that fix, switching embedding models
+against the same collection would've just broken silently the next time you tried to write a
+different-sized vector into it. I hadn't hit this one in practice, I just noticed it could
+happen and fixed it before it did.
 
-None of this is clever. It's the boring kind of engineering that looks like overkill right up
-until the exact day it isn't, and then it's the only reason the thing still works.
-
-## The part that's easy to skip past
-
-Keyword search is worse than semantic search. I don't think that's controversial: it
-doesn't get synonyms, doesn't understand meaning, it's just counting overlapping words. Put
-them side by side and semantic search wins basically every time.
-
-But "better when everything's working" and "better" aren't the same claim, and I think that
-distinction gets lost a lot. A search feature that's great until the one dependency it needs
-goes missing, and then it's just broken. That's not actually a good feature, it's a demo
-that only works in the demo. I'd rather have something a little worse on a good day that
-doesn't fall over on a bad one.
-
-That's basically the whole design philosophy here, if you can call it that: degrade instead
-of failing outright. The atomic reindexing, the incremental updates by file timestamp, the
-single-writer lock: it's all the same instinct applied in different places. Assume the fancy
-path breaks eventually. Make sure there's a dumb path underneath it that still works.
-
-## Why I'm even writing this down
-
-Docs go stale because nobody updates them after whatever incident made them necessary in the
-first place. People who actually know how something works leave, and the knowledge leaves
-with them. And now there's a new version of that same problem: the infrastructure that makes
-your docs *searchable* can quietly die too, and if nothing's built to handle that, you lose
-the knowledge again, just more quietly than a deleted file.
-
-I don't think the interesting version of "let an AI search your docs" is the one with the
-best retrieval numbers on a good day. I think it's the one that's honest about what it's
-actually doing on a bad one, instead of just going dark.
+I've been putting off publishing this because I kept trying to make the ending land on some
+bigger point about AI tooling and knowledge decay, and every version of that ending sounded
+like something off a conference slide. So I'm just going to leave it here: the embedding
+host died, I didn't notice, and the reason I didn't notice is the only part of this worth
+writing down.
 
 ---
 
-_Codicil's open source, if you want to look at how any of this actually works:
-[github.com/colehellman/codicil](https://github.com/colehellman/codicil)._
+_Codicil's open source: [github.com/colehellman/codicil](https://github.com/colehellman/codicil)._
