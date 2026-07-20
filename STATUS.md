@@ -1,6 +1,6 @@
 # Codicil — Status & Handoff
 
-_Last updated: 2026-07-13. This is a working handoff note, not marketing — see `README.md` for the product guide._
+_Last updated: 2026-07-20. This is a working handoff note, not marketing — see `README.md` for the product guide._
 
 ## Where it stands: Milestone 1 (prove the idea) — complete
 
@@ -19,7 +19,7 @@ a working `query_docs` tool that answers correctly in an MCP client.
   returning fresh results pulled straight off disk (verified by seeing files created *during
   the session itself* show up in a query result — proves it's reading current state, not a
   stale or mocked index).
-- ✅ **Test suite: 20 passing, fully offline** (`pytest -q`), including regressions for
+- ✅ **Test suite: 21 passing, fully offline** (`pytest -q`), including regressions for
   embed/write-safe swaps, empty-file removal, and cross-process store ownership.
 - ✅ **CI**: GitHub Actions running the test suite on `ubuntu-latest` / Python 3.11, passing
   on every merged PR so far (#1–#4).
@@ -32,12 +32,24 @@ a working `query_docs` tool that answers correctly in an MCP client.
   verified the sdist contains only `src/`, `tests/`, and Hatch's always-included metadata
   files (fixed a real leak of `.claude/settings.local.json`, `.mcp.json`, `CLAUDE.md`,
   `STATUS.md`, `.github/` in PR #3).
-- ✅ **Published to PyPI**: `codicil 0.1.0` is live — verified via the PyPI JSON API
-  (`https://pypi.org/pypi/codicil/json` returns `name: codicil`, `version: 0.1.0`), page at
-  `pypi.org/project/codicil/0.1.0/`. Both the sdist and wheel passed `twine check` before
-  upload. `pip install codicil` now works for anyone, not just from-source installs.
+- ✅ **Published to PyPI, twice.** `codicil 0.1.0` (PR #13) was the only release for 9 PRs
+  (#14–#22) — `main` had since gained the real cross-process guard, per-model collection
+  isolation, keyword-overlap reranking, and the `codicil query` subcommand, none of which
+  `pip install codicil` actually shipped. `codicil 0.2.0` (2026-07-20) closes that gap —
+  verified live via the version-specific JSON API (`https://pypi.org/pypi/codicil/0.2.0/json`
+  returns `version: 0.2.0`, `requires_python: >=3.11`), page at
+  `pypi.org/project/codicil/0.2.0/`. (The top-level "latest" endpoint,
+  `pypi.org/pypi/codicil/json`, lagged a few seconds behind the real release — CDN cache
+  propagation, not a failed upload; the version-specific endpoint confirmed it immediately.)
+  Both the sdist and wheel passed `twine check` before upload.
 - ⚠️ Semantic path (real embeddings via remote Ollama, `nomic-embed-text`) was verified in an
   earlier session per prior notes, not re-verified since.
+- ✅ **`__version__` found out of sync with `pyproject.toml`** — `cli.py`'s `--version` flag
+  reads `codicil.__version__` (`src/codicil/__init__.py`), which isn't wired to
+  `pyproject.toml` at all. The 0.2.0 bump initially only touched `pyproject.toml`, so
+  `codicil --version` kept reporting `0.1.0` until a follow-up commit on the same PR fixed
+  `__init__.py` too. Worth remembering for the next release: bump both, or wire
+  `__version__` to read from installed package metadata instead of duplicating the literal.
 - ✅ **Embed-failure warning noise fixed** (PR #6) — `index_repo` used to print one identical
   "cannot reach embedding host" line per file (~16 lines on this repo's own doc count); now
   counts failures and prints one consolidated summary line, with distinct error messages kept
@@ -78,13 +90,27 @@ a working `query_docs` tool that answers correctly in an MCP client.
   before merging: the Tests badge SVG returns `200`/`image/svg+xml` and reflects the passing
   workflow, the PyPI badge renders `v0.1.0`, the license badge renders `MIT`, and both link
   targets (workflow page, PyPI project page) return `200`.
-- ✅ **Cross-process store-access guard added** — `_index_lock` only serializes
+- ✅ **Cross-process store-access guard added, then hardened.** `_index_lock` only serializes
   access *within* one process; a separate `codicil index`/`codicil query` racing an
   already-running `codicil serve` against the same store could crash it (the same failure
-  mode that hit the bespoke predecessor this project was extracted from). An exclusive
-  `fcntl.flock` now protects the entire store for the lifetime of the owning process, so a
-  second `serve`, `index`, or `query` process is refused before opening Chroma. This also
-  covers concurrent one-shot commands without stale-PID cleanup.
+  mode that hit the bespoke predecessor this project was extracted from). PR #20 shipped a
+  PID-file check (`PID_FILE`, `refuse_if_server_running`) as the cross-process counterpart —
+  this bullet previously said that was an `fcntl.flock` guard; it wasn't yet, that was
+  premature. PR #22 replaced the PID-file check with the real thing: an exclusive
+  `fcntl.flock` held for the lifetime of the owning process, so a second `serve`, `index`, or
+  `query` process is refused before it can open Chroma at all, no stale-PID cleanup needed.
+  Also in #22: each embedding model now gets its own Chroma collection and state file
+  (`docs_<model-hash>`, `index_state_<model-hash>.json`) — Chroma fixes a collection's vector
+  dimension on first write, so switching models against one shared collection could otherwise
+  make the store permanently unindexable.
+- ⚠️ **Blog draft merged into `main`, but still unreviewed.**
+  `docs/blog/the-day-my-embedding-server-died.md` landed via PR #22 (2026-07-16) as part of a
+  larger hardening PR — it wasn't opened as its own PR the way the earlier plan intended. The
+  file itself still opens with "Draft — not yet published anywhere. Written for review before
+  it goes out." That's still true in the sense that it isn't posted anywhere external, but
+  it's now sitting readable on the public repo's default branch, which is more exposure than
+  "unopened PR on a side branch." Not resolved by this refresh — needs an actual read-through
+  to either drop the disclaimer or pull it back out.
 
 ### Open issues (candidates for GitHub issues)
 1. ~~Ranking wobble on vague/short queries~~ — mitigated and validated against real
@@ -97,11 +123,16 @@ a working `query_docs` tool that answers correctly in an MCP client.
 4. ~~Hardcoded relevance threshold~~ — done. `CODICIL_MIN_SCORE` (default 0.5).
 5. ~~grep-fallback duplicated snippet lines~~ — done, de-duplicated with regression test.
 6. ~~`.serena/project.yml` gets indexed~~ — done (PR #15). Added `.serena` to `SKIP_DIRS`.
-7. ~~Cross-process concurrent access to the Chroma store~~ — done. The advisory lock supplements
-   `_synchronized`, which continues to provide only in-process serialization.
+7. ~~Cross-process concurrent access to the Chroma store~~ — done, in two steps: PR #20's
+   PID-file check, then PR #22's `fcntl.flock` replacement (see Verified section above). The
+   flock supplements `_synchronized`, which continues to provide only in-process serialization.
+8. **New (2026-07-20): PyPI release drift.** `main` moved 9 PRs past the last publish before
+   anyone caught it (see the 0.2.0 entry above). No process fix yet — no CI step, no
+   reminder — flagged here so the next "should I publish" moment has something to check
+   against instead of relying on memory.
 
 ## Git
-- 23 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
+- 26 commits on `main`: `04aa7d8` (first pass) → `c327424` (threshold/dedup fix) → `7691c2e`
   (gitignore update) → `fb54d07` (setup docs + CI, PR #1) → `2ba04a6` (STATUS.md refresh,
   PR #2) → `ab93ffc` (sdist packaging fix, PR #3) → `f4a497c` (demo GIF, PR #4) → `bd37d6c`
   (STATUS.md refresh, PR #5) → `6421ce0` (embed-warning consolidation, PR #6) → `557b8e2`
@@ -112,11 +143,19 @@ a working `query_docs` tool that answers correctly in an MCP client.
   PR #14) → `3860b87` (exclude .serena from indexing, PR #15) → `4e552f7` (STATUS.md
   refresh, PR #16) → `4e4941f` (pip-install path in SETUP.md, PR #17) → `2a17ec7` (`codicil
   query` CLI subcommand, PR #18) → `a67242f` (README badges, PR #19) → `a334a0a`
-  (cross-process store guard, PR #20).
+  (cross-process store guard, PR #20) → `68eabbd` (STATUS.md refresh, PR #21) → `88b855a`
+  (harden indexing: real `fcntl.flock` guard, per-model collection isolation, blog draft
+  merged, PR #22) → `0d0efff` (version bump to 0.2.0, PR #23).
 - Remote: `origin` → `git@github.com:colehellman/codicil.git`, public, default branch `main`.
 - Standing process: every change lands via branch → PR → review → fix findings → squash-merge
-  → pull, no direct commits to `main` (established this session, PRs #1–#20 all followed it).
-- Open branch, no PR yet: `blog-draft` — see below.
+  → pull, no direct commits to `main` (established this session, PRs #1–#23 all followed it).
+- Branch cleanup (2026-07-20): `blog-draft` and `fix/reliability-and-docs` deleted, both
+  locally and on `origin`, after confirming neither had anything `main` didn't already have.
+  `blog-draft`'s copy of the blog post was an older, since-corrected draft (still said
+  "PID-file check" where `main`'s post-#22 version correctly says "advisory lock");
+  `fix/reliability-and-docs` was the branch squash-merged into #22 and only differed from
+  `main` by the version string. Repo has a single branch, `main`, going into the
+  mcpservers.org submission.
 
 ## Next steps (agreed sequence)
 1. ~~Close the live Claude Code loop~~ — done, verified.
@@ -125,11 +164,18 @@ a working `query_docs` tool that answers correctly in an MCP client.
 4. ~~Create the public GitHub repo~~ — already existed; confirmed public.
 5. **In progress:**
    - ~~Demo GIF~~ — done, merged (PR #4).
-   - **Blog post drafted, not published.** `docs/blog/the-day-my-embedding-server-died.md`
-     exists on pushed branch `blog-draft` — deliberately not opened as a PR yet (this repo is
-     public, so a PR would expose the draft before it's been read/approved). Waiting on
-     read-through before opening the PR.
-   - ~~PyPI publish~~ — done. `codicil 0.1.0` published and verified live (see above).
+   - **Blog post merged into `main`, still not reviewed.** Landed via PR #22 (2026-07-16) as
+     part of a larger hardening PR rather than on its own — the "don't open a PR until it's
+     read" plan got bypassed, not followed. Still carries its own "Draft — not yet published
+     anywhere" disclaimer. Not published externally, but now readable on the public repo's
+     default branch, which is more exposure than the old plan intended. Needs a read-through.
+   - ~~PyPI publish~~ — done, twice. `codicil 0.1.0` (PR #13) drifted 9 PRs behind `main`
+     before anyone noticed; `codicil 0.2.0` (2026-07-20) caught it up and is verified live —
+     see above.
+6. **Next:** submit to the mcpservers.org directory. Repo is otherwise ready — CI green,
+   PyPI matches `main`, sdist/wheel verified clean, stale branches gone. The blog-draft
+   disclaimer above is the one loose end worth resolving first, since directory traffic will
+   land directly on this branch.
 
 ## Positioning (don't drift)
 Sharp, differentiated, reliability-first tool + portfolio piece. The "AI memory" category is
