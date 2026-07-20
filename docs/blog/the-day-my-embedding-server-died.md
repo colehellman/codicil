@@ -1,88 +1,84 @@
 # The Day My Embedding Server Died and I Didn't Notice
 
-_Draft — not yet published anywhere. Written for review before it goes out._
+I've got a little MCP server called [Codicil](https://github.com/colehellman/codicil) that
+I use to search my own documentation: runbooks, config notes, the stuff I write down about
+my homelab so I don't have to remember it. It's just for me. One repo, one user, no team,
+nothing shared. An AI coding assistant can ask "how does X work" against my own docs instead
+of guessing.
 
-I run a small MCP server called [Codicil](https://github.com/colehellman/codicil) that
-indexes a repo's docs — runbooks, ADRs, config, architecture notes — and hands the relevant
-passages to an AI coding assistant on request. It's not a big system. It has one job:
-answer "how does X work?" from what's already written down, instead of making the assistant
-guess.
+It started as something hacked into my actual homelab setup. I've got a small Proxmox +
+Docker stack running at home, and for months this thing ran against a real Ollama instance
+doing embeddings with `nomic-embed-text`. Every doc got turned into vectors, every query was
+a real semantic search.
 
-Codicil started life as a bespoke tool wired into my homelab — a self-hosted stack of
-Proxmox, Docker, and a dozen other services I run at home — before I pulled it out into its
-own package. For months, running inside that homelab, it worked against a real embedding
-host — a local Ollama instance serving `nomic-embed-text` — turning every doc into vectors
-and every query into a semantic search over them.
+Then at some point I decommissioned that box. Wasn't even about this project, just general
+cleanup. And the embedding endpoint went quiet.
 
-Then the embedding server was retired. A host got decommissioned in some unrelated cleanup,
-and the endpoint just stopped answering.
+Nothing broke, though. That's the part worth sitting with.
 
-**Nothing broke.**
+I kept using it. Queries kept coming back with useful answers. It was probably a couple of
+weeks before I even noticed the semantic search wasn't happening anymore, and there was
+never going to be anyone else to notice it first. I'm the only user this thing has. It had
+quietly fallen back to plain keyword matching over the same files, and the only reason I
+found out was that I went looking, not because anything alerted me.
 
-Queries kept coming back. Answers kept being useful. For weeks, I didn't notice the semantic
-layer was gone. Every question was quietly being answered by keyword search over the same
-files instead, and the tool never said otherwise unless I went looking.
+## I should probably be embarrassed about that
 
-## Why that's the interesting part
+My first reaction was "how did I not notice my own tool lost half its brain for two weeks."
+But that's not really a surprising failure of monitoring: I'm both the only user and the
+only person who'd ever check. The more interesting part, to me, is that it didn't matter
+that I hadn't checked.
 
-The easy reaction is embarrassment: how did I not notice my "AI memory" tool lost its AI for
-weeks? But the more I sat with it, the more I realized the silence was the design working
-exactly as intended, not a gap in monitoring.
+Most tools like this have exactly one failure mode when the embedding service disappears:
+they just stop working. No embeddings, no search, maybe a stack trace if you're unlucky,
+right when you actually needed the answer.
 
-Most tools that depend on an external service have one failure mode when that service goes
-away: they fail. A search tool that needs an embedding host to embed the query has no
-fallback plan, so no host means no answer — or worse, a stack trace surfaced to a user who
-just wanted to know how the reverse proxy is configured.
+I'd specifically tried to avoid that when I built this. Not with some elaborate resilience
+framework, just a handful of "okay, what happens if this specific thing isn't there"
+decisions scattered through the code. No embedding host? Fall back to grepping the files
+directly. Index hasn't been built yet? Same fallback, still returns something instead of
+nothing. Reindex dies halfway through? New chunks get written before the old ones are
+deleted, so worst case you're stale, not empty.
 
-I'd built Codicil to refuse that outcome specifically. Every dependency has a fallback that
-still returns something useful:
+The one that actually got me, though (not in theory, for real), was two processes touching
+the index at the same time. A long-running server and a one-off reindex from a cron job,
+say. I hadn't guarded against that for a while, and it's the kind of thing that only bites
+you when it bites you. There's a lock on it now that just refuses the second process outright
+instead of letting them race each other into a corrupted store.
 
-- **No embedding host reachable?** Fall back to keyword search, read straight off disk.
-- **Index empty or not yet built?** Same fallback — there's no code path where the answer is
-  just "nothing."
-- **A re-index gets interrupted halfway?** New chunks are embedded *before* the old ones are
-  deleted, so a crash mid-reindex leaves you with stale data, never empty data.
-- **Two things try to touch the index at once, in the same process?** Serialized through a
-  single lock — no corrupted-index-from-a-race failure mode to debug at 2am.
-- **Two things try to touch the index at once, in *separate* processes** (a long-running
-  server and a one-shot reindex from a cron job or hook)? That one actually bit me: it's the
-  same failure mode described above, just at the process level instead of the thread level,
-  and it wasn't guarded against for a while. An exclusive advisory lock now refuses the second
-  process outright instead of letting it race the first into a crash.
+None of this is clever. It's the boring kind of engineering that looks like overkill right up
+until the exact day it isn't, and then it's the only reason the thing still works.
 
-None of these are exotic. They're the kind of decision that feels like overengineering right
-up until the day the thing you depended on quietly stops existing — and then it's the only
-reason the tool is still useful instead of dead.
+## The part that's easy to skip past
 
-## The trade nobody puts in the pitch deck
+Keyword search is worse than semantic search. I don't think that's controversial: it
+doesn't get synonyms, doesn't understand meaning, it's just counting overlapping words. Put
+them side by side and semantic search wins basically every time.
 
-Here's the part that's easy to gloss over: keyword fallback is *worse* than semantic search.
-It doesn't understand synonyms, it doesn't rank by meaning, it just counts word overlap. If
-you'd shown me a side-by-side comparison of the two search qualities in isolation, semantic
-search wins every time.
+But "better when everything's working" and "better" aren't the same claim, and I think that
+distinction gets lost a lot. A search feature that's great until the one dependency it needs
+goes missing, and then it's just broken. That's not actually a good feature, it's a demo
+that only works in the demo. I'd rather have something a little worse on a good day that
+doesn't fall over on a bad one.
 
-But "wins when it's working" isn't the same claim as "wins." A brilliant search feature that
-goes dark the moment its infrastructure hiccups isn't a brilliant search feature — it's a
-liability with good demo day. I'd rather have a tool that's slightly worse on its best day and
-never worse than "still works" on its worst one.
+That's basically the whole design philosophy here, if you can call it that: degrade instead
+of failing outright. The atomic reindexing, the incremental updates by file timestamp, the
+single-writer lock: it's all the same instinct applied in different places. Assume the fancy
+path breaks eventually. Make sure there's a dumb path underneath it that still works.
 
-That's the actual design principle underneath Codicil, stated plainly: **degrade, don't
-fail.** Every other decision in the codebase — the atomic-swap reindexing, the incremental
-mtime tracking, the single-writer lock — is the same idea applied to a different failure
-mode. Assume the sophisticated path will break sometime. Make sure the simple path still
-works when it does.
+## Why I'm even writing this down
 
-## The broader thing this taught me
+Docs go stale because nobody updates them after whatever incident made them necessary in the
+first place. People who actually know how something works leave, and the knowledge leaves
+with them. And now there's a new version of that same problem: the infrastructure that makes
+your docs *searchable* can quietly die too, and if nothing's built to handle that, you lose
+the knowledge again, just more quietly than a deleted file.
 
-Engineering knowledge decays in predictable ways. Docs go stale because nobody updates them
-after the incident that made them necessary. Tribal knowledge leaves when the person who had
-it does. And now, increasingly, the infrastructure that makes that knowledge *searchable* can
-quietly disappear too — and if the tool sitting on top of it doesn't plan for that, the
-knowledge disappears with it, just less visibly than a deleted file.
-
-The version of "AI memory" worth building isn't the one with the best retrieval quality on a
-good day. It's the one that's still telling you the truth on a bad one.
+I don't think the interesting version of "let an AI search your docs" is the one with the
+best retrieval numbers on a good day. I think it's the one that's honest about what it's
+actually doing on a bad one, instead of just going dark.
 
 ---
 
-_Codicil is open source: [github.com/colehellman/codicil](https://github.com/colehellman/codicil)._
+_Codicil's open source, if you want to look at how any of this actually works:
+[github.com/colehellman/codicil](https://github.com/colehellman/codicil)._
