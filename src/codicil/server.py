@@ -161,8 +161,25 @@ def embed_many(texts: list[str]) -> list[list[float]]:
 # Keyword fallback (used when the embedding host is offline)
 # ---------------------------------------------------------------------------
 
+# Natural-language questions (the phrasing an AI assistant actually relays) front-load
+# filler words ("how", "do", "you") that pass the length>2 filter and can occupy
+# keyword slots ahead of the words that actually distinguish one doc from another.
+# Verified against a real external corpus (pallets/click docs): the query "How do I
+# test a Click command in unit tests?" extracted ['how', 'test', 'click', 'command',
+# 'unit'] via the old logic, and grep_fallback ranked an unrelated doc above the
+# actually-relevant testing doc. Filtering fillers first fixes that without needing
+# corpus-wide IDF weighting.
+_STOPWORDS = {
+    "how", "why", "what", "when", "where", "who", "which", "does", "did", "do",
+    "you", "your", "the", "and", "for", "are", "but", "not", "with", "this",
+    "that", "from", "have", "has", "had", "was", "were", "will", "can", "could",
+    "would", "should", "into", "about", "there", "their", "them", "get", "use",
+    "using",
+}
+
+
 def _extract_keywords(query: str) -> list[str]:
-    return [w.lower() for w in query.split() if len(w) > 2][:5]
+    return [w.lower() for w in query.split() if len(w) > 2 and w.lower() not in _STOPWORDS][:5]
 
 
 def _keyword_overlap(keywords: list[str], text: str) -> float:
