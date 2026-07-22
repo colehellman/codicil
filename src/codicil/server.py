@@ -76,7 +76,11 @@ STATE_FILE = STORE_PATH / f"index_state_{_MODEL_KEY}.json"
 # Tracks when the semantic backend last started failing, so query_docs can report
 # how long a query has been degraded instead of just that it currently is — the
 # two-week embed-host outage that motivated this was invisible precisely because
-# nothing recorded *when* it started.
+# nothing recorded *when* it started. Only an actual embed() failure counts as
+# "degraded" here — an empty collection (nothing indexed yet, or a repo with no
+# indexable files) also serves via keyword_fallback but is a different condition
+# and must not mark this, or a healthy backend on a fresh repo would falsely and
+# permanently read as "degraded since <first query>".
 DEGRADATION_FILE = STORE_PATH / f"degradation_{_MODEL_KEY}.json"
 
 # Chroma's persistent client and the JSON state file are process-local resources.
@@ -440,9 +444,12 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         n_results: Passages to return, 1–10 (default 5).
     """
     if collection.count() == 0:
+        # Nothing indexed yet (fresh repo, or one with no indexable files) — keyword
+        # search is genuinely what serves this query, but that's not evidence the
+        # embedding backend itself has failed, so don't mark degradation for it.
         return QueryResult(
             backend="keyword_fallback",
-            degraded_since=_mark_degraded(),
+            degraded_since=None,
             results=grep_fallback(query, n_results),
         )
     try:
