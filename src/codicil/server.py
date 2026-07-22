@@ -514,6 +514,69 @@ def reindex_docs(force: bool = False) -> str:
     return f"{indexed} indexed, {skipped} skipped ({collection.count()} total chunks)."
 
 
+class StatusResult(TypedDict):
+    """codicil_status's structured return — check health on demand instead of
+    waiting for a real query to reveal degradation."""
+    backend: Literal["semantic", "keyword_fallback"]
+    degraded_since: str | None
+    embed_url: str
+    embed_model: str
+    indexed_files: int
+    indexed_chunks: int
+    stale_files: int  # on disk but not reflected in the index: changed, new, or deleted
+
+
+@mcp.tool()
+def codicil_status() -> StatusResult:
+    """Check whether semantic search is actually reachable right now, and how
+    stale the index is — without waiting for a real query to reveal degradation.
+
+    Unlike query_docs, this always attempts to reach the embedding host: that's
+    the point of a status check. It does not reindex or write chunks.
+    """
+    # Deliberately NOT under _index_lock: embed() can block for the full 30s
+    # client timeout against a slow/unresponsive host, and this tool's only job
+    # is a quick health probe — holding the lock here would stall every other
+    # in-process query_docs/reindex_docs call (including query_docs's fast,
+    # network-free keyword fallback) for that same window. Only the bookkeeping
+    # below, which touches shared state, needs the lock.
+    try:
+        embed("codicil status check")
+        backend: Literal["semantic", "keyword_fallback"] = "semantic"
+        embed_failed = False
+    except RuntimeError:
+        backend = "keyword_fallback"
+        embed_failed = True
+
+    with _index_lock:
+        if embed_failed:
+            degraded_since = _mark_degraded()
+        else:
+            _mark_healthy()
+            degraded_since = None
+
+        state = _load_state()
+        stale = sum(
+            1 for rel in state if not (REPO_PATH / rel).exists()
+        )
+        for path in sorted(REPO_PATH.rglob("*")):
+            if path.is_dir() or any(d in path.parts for d in SKIP_DIRS) or not is_indexed_file(path):
+                continue
+            rel = str(path.relative_to(REPO_PATH))
+            if state.get(rel) != path.stat().st_mtime:
+                stale += 1
+
+        return StatusResult(
+            backend=backend,
+            degraded_since=degraded_since,
+            embed_url=EMBED_URL,
+            embed_model=EMBED_MODEL,
+            indexed_files=len(state),
+            indexed_chunks=collection.count(),
+            stale_files=stale,
+        )
+
+
 def serve() -> None:
     """Build the index if empty, then run the MCP server (called by `codicil serve`)."""
     if collection.count() == 0:
