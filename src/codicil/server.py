@@ -514,6 +514,57 @@ def reindex_docs(force: bool = False) -> str:
     return f"{indexed} indexed, {skipped} skipped ({collection.count()} total chunks)."
 
 
+class StatusResult(TypedDict):
+    """codicil_status's structured return — check health on demand instead of
+    waiting for a real query to reveal degradation."""
+    backend: Literal["semantic", "keyword_fallback"]
+    degraded_since: str | None
+    embed_url: str
+    embed_model: str
+    indexed_files: int
+    indexed_chunks: int
+    stale_files: int  # on disk but not reflected in the index: changed, new, or deleted
+
+
+@mcp.tool()
+@_synchronized
+def codicil_status() -> StatusResult:
+    """Check whether semantic search is actually reachable right now, and how
+    stale the index is — without waiting for a real query to reveal degradation.
+
+    Unlike query_docs, this always attempts to reach the embedding host: that's
+    the point of a status check. It does not reindex or write chunks.
+    """
+    try:
+        embed("codicil status check")
+        _mark_healthy()
+        backend: Literal["semantic", "keyword_fallback"] = "semantic"
+    except RuntimeError:
+        _mark_degraded()
+        backend = "keyword_fallback"
+
+    state = _load_state()
+    stale = sum(
+        1 for rel, mtime in state.items() if not (REPO_PATH / rel).exists()
+    )
+    for path in sorted(REPO_PATH.rglob("*")):
+        if path.is_dir() or any(d in path.parts for d in SKIP_DIRS) or not is_indexed_file(path):
+            continue
+        rel = str(path.relative_to(REPO_PATH))
+        if state.get(rel) != path.stat().st_mtime:
+            stale += 1
+
+    return StatusResult(
+        backend=backend,
+        degraded_since=_load_degradation().get("degraded_since"),
+        embed_url=EMBED_URL,
+        embed_model=EMBED_MODEL,
+        indexed_files=len(state),
+        indexed_chunks=collection.count(),
+        stale_files=stale,
+    )
+
+
 def serve() -> None:
     """Build the index if empty, then run the MCP server (called by `codicil serve`)."""
     if collection.count() == 0:
