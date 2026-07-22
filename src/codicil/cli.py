@@ -62,7 +62,11 @@ def main() -> None:
         if server.collection.count() == 0:
             print(f"codicil: index empty — building from {repo} …", file=sys.stderr)
             server.index_repo()
-        print(server.query_docs(" ".join(args.query), n_results=args.n_results))
+        result = server.query_docs(" ".join(args.query), n_results=args.n_results)
+        if result["backend"] == "keyword_fallback":
+            print(f"codicil: semantic search unavailable — degraded since {result['degraded_since']}, "
+                  "showing keyword-search results.", file=sys.stderr)
+        print(result["results"])
 
 
 if __name__ == "__main__":
