@@ -14,7 +14,9 @@ import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, TypedDict
 
 import chromadb
 import httpx
@@ -71,6 +73,11 @@ STORE_PATH.mkdir(parents=True, exist_ok=True)
 _MODEL_KEY = hashlib.sha256(EMBED_MODEL.encode("utf-8")).hexdigest()[:12]
 COLLECTION_NAME = f"docs_{_MODEL_KEY}"
 STATE_FILE = STORE_PATH / f"index_state_{_MODEL_KEY}.json"
+# Tracks when the semantic backend last started failing, so query_docs can report
+# how long a query has been degraded instead of just that it currently is — the
+# two-week embed-host outage that motivated this was invisible precisely because
+# nothing recorded *when* it started.
+DEGRADATION_FILE = STORE_PATH / f"degradation_{_MODEL_KEY}.json"
 
 # Chroma's persistent client and the JSON state file are process-local resources.
 # Hold an exclusive advisory lock for this server/CLI process so a hook or a second
@@ -391,25 +398,62 @@ def index_repo(force: bool = False) -> tuple[int, int]:
 mcp = FastMCP("codicil")
 
 
+class QueryResult(TypedDict):
+    """query_docs's structured return. `backend` and `degraded_since` are here so
+    a calling assistant can detect and surface degradation programmatically instead
+    of relying on prose it might paraphrase away — see the module docstring."""
+    backend: Literal["semantic", "keyword_fallback"]
+    degraded_since: str | None  # ISO 8601 UTC timestamp; None while backend == "semantic"
+    results: str
+
+
+def _load_degradation() -> dict:
+    return json.loads(DEGRADATION_FILE.read_text()) if DEGRADATION_FILE.exists() else {}
+
+
+def _mark_healthy() -> None:
+    if _load_degradation().get("degraded_since") is not None:
+        DEGRADATION_FILE.write_text(json.dumps({"degraded_since": None}))
+
+
+def _mark_degraded() -> str | None:
+    """Record the first time degradation was observed; return that timestamp
+    unchanged on subsequent calls so `degraded_since` reflects onset, not now."""
+    state = _load_degradation()
+    if state.get("degraded_since") is None:
+        state["degraded_since"] = datetime.now(timezone.utc).isoformat()
+        DEGRADATION_FILE.write_text(json.dumps(state))
+    return state["degraded_since"]
+
+
 @mcp.tool()
 @_synchronized
-def query_docs(query: str, n_results: int = 5) -> str:
+def query_docs(query: str, n_results: int = 5) -> QueryResult:
     """Search this repository's documentation and return the relevant passages.
 
     Use this before reading whole files — it returns only the chunks that matter,
     at a fraction of the token cost. Falls back to keyword search if the embedding
-    host is offline.
+    host is offline; check `backend` in the response to see which one answered.
 
     Args:
         query:     Natural-language question or keywords.
         n_results: Passages to return, 1–10 (default 5).
     """
     if collection.count() == 0:
-        return grep_fallback(query, n_results)
+        return QueryResult(
+            backend="keyword_fallback",
+            degraded_since=_mark_degraded(),
+            results=grep_fallback(query, n_results),
+        )
     try:
         q_vec = embed(query)
     except RuntimeError:
-        return grep_fallback(query, n_results)
+        return QueryResult(
+            backend="keyword_fallback",
+            degraded_since=_mark_degraded(),
+            results=grep_fallback(query, n_results),
+        )
+    _mark_healthy()
 
     n = min(max(n_results, 1), 10, collection.count())
     # n is capped at 10 (above) and RERANK_POOL_SIZE is 15, so the pool always
@@ -421,7 +465,7 @@ def query_docs(query: str, n_results: int = 5) -> str:
         include=["documents", "metadatas", "distances"],
     )
     if not results["documents"][0]:
-        return "No relevant documentation found."
+        return QueryResult(backend="semantic", degraded_since=None, results="No relevant documentation found.")
 
     keywords = _extract_keywords(query)
     candidates = []  # (rerank_score, embed_score, doc, meta)
@@ -435,7 +479,10 @@ def query_docs(query: str, n_results: int = 5) -> str:
         rerank_score = (1 - KEYWORD_RERANK_WEIGHT) * embed_score + KEYWORD_RERANK_WEIGHT * overlap
         candidates.append((rerank_score, embed_score, doc, meta))
     if not candidates:
-        return "No sufficiently relevant documentation found."
+        return QueryResult(
+            backend="semantic", degraded_since=None,
+            results="No sufficiently relevant documentation found.",
+        )
 
     # Rerank the wider pool by the blended score, then keep only the originally
     # requested count. The displayed score is still the raw embedding similarity —
@@ -446,7 +493,7 @@ def query_docs(query: str, n_results: int = 5) -> str:
         f"**{meta['source']}** (score {embed_score})\n\n{doc}"
         for _, embed_score, doc, meta in candidates[:n]
     ]
-    return "\n\n---\n\n".join(parts)
+    return QueryResult(backend="semantic", degraded_since=None, results="\n\n---\n\n".join(parts))
 
 
 @mcp.tool()

@@ -43,7 +43,7 @@ def test_rerank_corrects_close_embedding_margin(docs_repo, monkeypatch):
     server.index_repo()
     # Raw embedding order would put wrong.md first (0.611 > 0.598); reranking on
     # keyword overlap (query keywords only appear in right.md) should flip it.
-    out = server.query_docs("atomic swap reindexing safety", n_results=1)
+    out = server.query_docs("atomic swap reindexing safety", n_results=1)["results"]
     assert "right.md" in out
     assert "wrong.md" not in out
 
@@ -73,6 +73,6 @@ def test_rerank_does_not_override_a_large_embedding_gap(docs_repo, monkeypatch):
     )
 
     server.index_repo()
-    out = server.query_docs("atomic swap reindexing safety", n_results=1)
+    out = server.query_docs("atomic swap reindexing safety", n_results=1)["results"]
     assert "clear-winner.md" in out
     assert "keyword-stuffed.md" not in out
