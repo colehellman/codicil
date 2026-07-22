@@ -22,6 +22,43 @@ def test_status_reports_keyword_fallback_when_embed_host_unreachable(docs_repo, 
     result = server.codicil_status()
     assert result["backend"] == "keyword_fallback"
     assert result["degraded_since"] is not None
+    assert result["canary_ok"] is False
+    assert result["canary_score"] is None
+
+
+def test_status_canary_ok_when_embeddings_are_genuinely_related(docs_repo, monkeypatch):
+    def controlled_embed(text, kind="query"):
+        if text == server._CANARY_QUERY:
+            return [1.0, 0.0]
+        if text == server._CANARY_DOCUMENT:
+            return [0.9, 0.436]  # cosine ~0.9 — comfortably above MIN_SCORE
+        return [0.5, 0.5]
+
+    monkeypatch.setattr(server, "embed", controlled_embed)
+    result = server.codicil_status()
+    assert result["canary_ok"] is True
+    assert result["canary_score"] >= server.MIN_SCORE
+    assert result["backend"] == "semantic"
+    assert result["degraded_since"] is None
+
+
+def test_status_canary_fails_when_embed_succeeds_but_is_untrustworthy(docs_repo, monkeypatch):
+    # A wrong model or corrupted response can still let embed() return *something*
+    # without raising RuntimeError -- this must still count as degraded, since
+    # query_docs's real answers would be equally corrupted by the same cause.
+    def controlled_embed(text, kind="query"):
+        if text == server._CANARY_QUERY:
+            return [1.0, 0.0]
+        if text == server._CANARY_DOCUMENT:
+            return [0.0, 1.0]  # orthogonal -- cosine 0.0, clearly below MIN_SCORE
+        return [0.5, 0.5]
+
+    monkeypatch.setattr(server, "embed", controlled_embed)
+    result = server.codicil_status()
+    assert result["canary_ok"] is False
+    assert result["canary_score"] < server.MIN_SCORE
+    assert result["backend"] == "keyword_fallback"
+    assert result["degraded_since"] is not None
 
 
 def test_status_reports_embed_url_and_model(docs_repo, fake_embed):

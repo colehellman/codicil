@@ -168,6 +168,24 @@ def embed_many(texts: list[str]) -> list[list[float]]:
     finally:
         ex.shutdown(wait=False)
 
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+
+# A fixed (query, document) pair with zero shared vocabulary — reachability alone
+# doesn't prove the embedding backend is actually working: a wrong model, a
+# corrupted response, or a silently-truncated vector would still let embed()
+# return *something* without raising. Cosine similarity between a genuinely
+# related pair that share no literal words is what actually exercises semantic
+# understanding, not connectivity. Verified zero token overlap between these two
+# strings (case-insensitive, punctuation-stripped) before choosing them.
+_CANARY_QUERY = "How would someone get money back after paying out of pocket on a business trip?"
+_CANARY_DOCUMENT = "Employees can submit reimbursement requests for travel expenses through the finance portal."
+
 # ---------------------------------------------------------------------------
 # Keyword fallback (used when the embedding host is offline)
 # ---------------------------------------------------------------------------
@@ -519,6 +537,8 @@ class StatusResult(TypedDict):
     waiting for a real query to reveal degradation."""
     backend: Literal["semantic", "keyword_fallback"]
     degraded_since: str | None
+    canary_ok: bool  # a fixed no-lexical-overlap (query, doc) pair actually scores as related
+    canary_score: float | None  # None if the embed host was unreachable
     embed_url: str
     embed_model: str
     indexed_files: int
@@ -540,20 +560,29 @@ def codicil_status() -> StatusResult:
     # in-process query_docs/reindex_docs call (including query_docs's fast,
     # network-free keyword fallback) for that same window. Only the bookkeeping
     # below, which touches shared state, needs the lock.
+    # Connectivity alone doesn't prove the backend is trustworthy: a wrong model,
+    # a corrupted response, or a silently-truncated vector would still let embed()
+    # return *something* without raising. The canary must also score as related —
+    # a low score despite a successful embed() call counts as degraded too, since
+    # query_docs's real answers would be equally corrupted by the same cause.
     try:
-        embed("codicil status check")
-        backend: Literal["semantic", "keyword_fallback"] = "semantic"
-        embed_failed = False
+        query_vec = embed(_CANARY_QUERY, kind="query")
+        doc_vec = embed(_CANARY_DOCUMENT, kind="document")
+        canary_score: float | None = round(_cosine_similarity(query_vec, doc_vec), 3)
+        canary_ok = canary_score >= MIN_SCORE
     except RuntimeError:
-        backend = "keyword_fallback"
-        embed_failed = True
+        canary_score = None
+        canary_ok = False
+
+    healthy = canary_ok
+    backend: Literal["semantic", "keyword_fallback"] = "semantic" if healthy else "keyword_fallback"
 
     with _index_lock:
-        if embed_failed:
-            degraded_since = _mark_degraded()
-        else:
+        if healthy:
             _mark_healthy()
             degraded_since = None
+        else:
+            degraded_since = _mark_degraded()
 
         state = _load_state()
         stale = sum(
@@ -569,6 +598,8 @@ def codicil_status() -> StatusResult:
         return StatusResult(
             backend=backend,
             degraded_since=degraded_since,
+            canary_ok=canary_ok,
+            canary_score=canary_score,
             embed_url=EMBED_URL,
             embed_model=EMBED_MODEL,
             indexed_files=len(state),
