@@ -2,6 +2,7 @@
 to reveal degradation — unlike query_docs, it always probes the embedding host.
 """
 
+import threading
 import time
 
 from codicil import server
@@ -69,3 +70,39 @@ def test_status_does_not_reindex_or_write_chunks(docs_repo, fake_embed):
 
     server.codicil_status()
     assert server.collection.count() == 0  # status must not index as a side effect
+
+
+def test_status_does_not_block_concurrent_query_docs_during_slow_embed(docs_repo, monkeypatch):
+    # Regression: codicil_status used to hold _index_lock for its entire body,
+    # including the live embed() probe -- a slow/unresponsive embed host meant a
+    # concurrent query_docs call (even one needing no embed at all, on an empty
+    # collection) was blocked for the same duration. The embed() probe must run
+    # outside the lock; only the bookkeeping after it needs to be serialized.
+    def slow_embed(text, kind="query"):
+        time.sleep(0.3)
+        raise RuntimeError("simulated slow, unresponsive embed host")
+
+    monkeypatch.setattr(server, "embed", slow_embed)
+
+    durations = {}
+
+    def call_status():
+        t0 = time.time()
+        server.codicil_status()
+        durations["status"] = time.time() - t0
+
+    def call_query_docs():
+        time.sleep(0.05)  # let codicil_status start (and begin its slow embed call) first
+        t0 = time.time()
+        server.query_docs("anything")  # empty collection -> no embed call needed
+        durations["query_docs"] = time.time() - t0
+
+    t1 = threading.Thread(target=call_status)
+    t2 = threading.Thread(target=call_query_docs)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert durations["status"] >= 0.3  # actually waited out the slow embed call
+    assert durations["query_docs"] < 0.1  # must not be blocked behind it
