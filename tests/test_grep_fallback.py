@@ -47,3 +47,19 @@ def test_extract_keywords_drops_filler_words():
         "How do you handle the retry logic when a request fails and times out"
     )
     assert kws == ["handle", "retry", "logic", "request", "fails"]
+
+
+def test_extract_keywords_falls_back_when_query_is_all_filler():
+    # An all-filler query (every word is a stopword) would otherwise filter down to
+    # an empty list, and grep_fallback's `if not keywords` guard would then skip the
+    # search entirely — worse than before stopword filtering existed. Falling back
+    # to the unfiltered candidates keeps this a no-worse-than-before degradation.
+    kws = server._extract_keywords("How do you use this for that")
+    assert kws == ["how", "you", "use", "this", "for"]
+
+
+def test_grep_fallback_still_searches_on_all_filler_query(docs_repo):
+    (docs_repo / "a.md").write_text("# A\n\nhow you use this for that reasons.\n")
+    out = server.grep_fallback("How do you use this for that")
+    assert "No search terms provided" not in out
+    assert "a.md" in out

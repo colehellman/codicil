@@ -179,7 +179,14 @@ _STOPWORDS = {
 
 
 def _extract_keywords(query: str) -> list[str]:
-    return [w.lower() for w in query.split() if len(w) > 2 and w.lower() not in _STOPWORDS][:5]
+    candidates = [w.lower() for w in query.split() if len(w) > 2]
+    # An all-filler query (e.g. "How do you use this for that") would otherwise filter
+    # down to nothing, and grep_fallback's `if not keywords` guard (below) would then
+    # skip the search entirely — worse than the pre-stopword-filter behavior. Falling
+    # back to the unfiltered candidates preserves "degrade, never fail": the same
+    # weak-but-nonzero keyword set the old logic would have used.
+    filtered = [w for w in candidates if w not in _STOPWORDS]
+    return (filtered or candidates)[:5]
 
 
 def _keyword_overlap(keywords: list[str], text: str) -> float:
