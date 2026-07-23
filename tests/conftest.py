@@ -29,9 +29,10 @@ def fake_vec(text: str, dim: int = 16) -> list[float]:
 
 @pytest.fixture(autouse=True)
 def clean_index(tmp_path, monkeypatch):
-    """Give each test a fresh state file, degradation file, and an empty collection."""
+    """Give each test a fresh state file, degradation file, query log, and empty collection."""
     monkeypatch.setattr(server, "STATE_FILE", tmp_path / "index_state.json")
     monkeypatch.setattr(server, "DEGRADATION_FILE", tmp_path / "degradation.json")
+    monkeypatch.setattr(server, "QUERY_LOG_FILE", tmp_path / "query_log.jsonl")
     ids = server.collection.get().get("ids", [])
     if ids:
         server.collection.delete(ids=ids)
