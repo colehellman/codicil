@@ -433,17 +433,31 @@ def _load_degradation() -> dict:
     return json.loads(DEGRADATION_FILE.read_text()) if DEGRADATION_FILE.exists() else {}
 
 
-def _mark_healthy() -> None:
-    if _load_degradation().get("degraded_since") is not None:
-        DEGRADATION_FILE.write_text(json.dumps({"degraded_since": None}))
+def _mark_healthy(strong: bool = False) -> None:
+    """Clear degradation. query_docs's plain "embed() didn't raise" signal (the
+    default, `strong=False`) is weaker than codicil_status's canary check — it
+    never verifies embedding *quality*, only reachability — so it must not clear
+    a degradation the canary flagged: a corrupted-but-reachable model can still
+    let ordinary queries succeed while remaining genuinely untrustworthy, and
+    clearing that would reset degraded_since to "now" on the next canary check
+    instead of preserving the true onset. Only codicil_status's canary-validated
+    success (`strong=True`) can clear a canary-flagged degradation.
+    """
+    state = _load_degradation()
+    if state.get("degraded_since") is None:
+        return
+    if not strong and state.get("reason") == "canary":
+        return
+    DEGRADATION_FILE.write_text(json.dumps({"degraded_since": None, "reason": None}))
 
 
-def _mark_degraded() -> str | None:
+def _mark_degraded(reason: Literal["connectivity", "canary"] = "connectivity") -> str | None:
     """Record the first time degradation was observed; return that timestamp
     unchanged on subsequent calls so `degraded_since` reflects onset, not now."""
     state = _load_degradation()
     if state.get("degraded_since") is None:
         state["degraded_since"] = datetime.now(timezone.utc).isoformat()
+        state["reason"] = reason
         DEGRADATION_FILE.write_text(json.dumps(state))
     return state["degraded_since"]
 
@@ -565,11 +579,13 @@ def codicil_status() -> StatusResult:
     # return *something* without raising. The canary must also score as related —
     # a low score despite a successful embed() call counts as degraded too, since
     # query_docs's real answers would be equally corrupted by the same cause.
+    degrade_reason: Literal["connectivity", "canary"] = "connectivity"
     try:
         query_vec = embed(_CANARY_QUERY, kind="query")
         doc_vec = embed(_CANARY_DOCUMENT, kind="document")
         canary_score: float | None = round(_cosine_similarity(query_vec, doc_vec), 3)
         canary_ok = canary_score >= MIN_SCORE
+        degrade_reason = "canary"  # embed reached the host fine; only the canary failed
     except RuntimeError:
         canary_score = None
         canary_ok = False
@@ -579,10 +595,10 @@ def codicil_status() -> StatusResult:
 
     with _index_lock:
         if healthy:
-            _mark_healthy()
+            _mark_healthy(strong=True)
             degraded_since = None
         else:
-            degraded_since = _mark_degraded()
+            degraded_since = _mark_degraded(degrade_reason)
 
         state = _load_state()
         stale = sum(
