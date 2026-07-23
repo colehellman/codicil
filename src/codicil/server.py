@@ -462,6 +462,56 @@ def _mark_degraded(reason: Literal["connectivity", "canary"] = "connectivity") -
     return state["degraded_since"]
 
 
+# A lightweight, append-only history of real query traffic -- distinct from
+# DEGRADATION_FILE, which only tracks the binary onset/clearing of hard
+# failures. This can surface a slow quality decline (top_score trending down
+# over many queries) even when nothing ever raises RuntimeError or fails the
+# canary outright. Not written by codicil_status: that's synthetic traffic,
+# not real usage, and would muddy a log meant to reflect actual query quality.
+QUERY_LOG_FILE = STORE_PATH / "query_log.jsonl"
+
+
+def _log_query(backend: str, top_score: float | None) -> None:
+    # query_docs is @_synchronized, so this write is already serialized by
+    # _index_lock in-process; the store's single-writer invariant covers
+    # cross-process safety. Telemetry must not be able to break the tool it's
+    # observing -- a disk-full or permission error here degrades to "not
+    # logged," never to a crashed query_docs call.
+    try:
+        line = json.dumps({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "backend": backend,
+            "top_score": top_score,
+        })
+        with open(QUERY_LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except OSError as e:
+        print(f"codicil: could not write to query log — {e}", file=sys.stderr)
+
+
+def _finish(result: QueryResult, top_score: float | None) -> QueryResult:
+    _log_query(result["backend"], top_score)
+    return result
+
+
+def _with_fallback_nudge(results: str, *, degraded: bool) -> str:
+    # The `backend`/`degraded_since` fields exist so a calling assistant can detect
+    # degradation programmatically -- but nothing forces it to act on them. This
+    # appends a plain-text next step directly into the passage content itself,
+    # the one thing every caller reads regardless of whether it inspects
+    # structured fields. Two distinct messages, not one: an unindexed-but-healthy
+    # repo (degraded=False) is not an outage, and claiming "unavailable" here
+    # would reintroduce the exact false alarm degraded_since=None was built to
+    # prevent. Neither message names a specific command -- codicil_status is an
+    # MCP tool only, and this text is also read verbatim by `codicil query`'s
+    # CLI output, which has no such subcommand.
+    if degraded:
+        note = "Semantic search is currently unavailable — this used keyword search instead."
+    else:
+        note = "No semantic index exists yet for this repo — this used keyword search instead."
+    return f"{results}\n\n_({note})_"
+
+
 @mcp.tool()
 @_synchronized
 def query_docs(query: str, n_results: int = 5) -> QueryResult:
@@ -479,19 +529,19 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         # Nothing indexed yet (fresh repo, or one with no indexable files) — keyword
         # search is genuinely what serves this query, but that's not evidence the
         # embedding backend itself has failed, so don't mark degradation for it.
-        return QueryResult(
+        return _finish(QueryResult(
             backend="keyword_fallback",
             degraded_since=None,
-            results=grep_fallback(query, n_results),
-        )
+            results=_with_fallback_nudge(grep_fallback(query, n_results), degraded=False),
+        ), top_score=None)
     try:
         q_vec = embed(query)
     except RuntimeError:
-        return QueryResult(
+        return _finish(QueryResult(
             backend="keyword_fallback",
             degraded_since=_mark_degraded(),
-            results=grep_fallback(query, n_results),
-        )
+            results=_with_fallback_nudge(grep_fallback(query, n_results), degraded=True),
+        ), top_score=None)
     _mark_healthy()
 
     n = min(max(n_results, 1), 10, collection.count())
@@ -504,7 +554,15 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         include=["documents", "metadatas", "distances"],
     )
     if not results["documents"][0]:
-        return QueryResult(backend="semantic", degraded_since=None, results="No relevant documentation found.")
+        return _finish(
+            QueryResult(backend="semantic", degraded_since=None, results="No relevant documentation found."),
+            top_score=None,
+        )
+
+    # Best raw score in the pool, whether or not it clears MIN_SCORE below — logged
+    # even on a "no sufficiently relevant" outcome so a slow quality decline shows up
+    # as a falling top_score over time, not just a binary found/not-found signal.
+    best_pool_score = round(1 - min(results["distances"][0]), 3)
 
     keywords = _extract_keywords(query)
     candidates = []  # (rerank_score, embed_score, doc, meta)
@@ -518,10 +576,10 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         rerank_score = (1 - KEYWORD_RERANK_WEIGHT) * embed_score + KEYWORD_RERANK_WEIGHT * overlap
         candidates.append((rerank_score, embed_score, doc, meta))
     if not candidates:
-        return QueryResult(
+        return _finish(QueryResult(
             backend="semantic", degraded_since=None,
             results="No sufficiently relevant documentation found.",
-        )
+        ), top_score=best_pool_score)
 
     # Rerank the wider pool by the blended score, then keep only the originally
     # requested count. The displayed score is still the raw embedding similarity —
@@ -532,7 +590,10 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         f"**{meta['source']}** (score {embed_score})\n\n{doc}"
         for _, embed_score, doc, meta in candidates[:n]
     ]
-    return QueryResult(backend="semantic", degraded_since=None, results="\n\n---\n\n".join(parts))
+    return _finish(
+        QueryResult(backend="semantic", degraded_since=None, results="\n\n---\n\n".join(parts)),
+        top_score=candidates[0][1],
+    )
 
 
 @mcp.tool()
