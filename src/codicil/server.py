@@ -168,6 +168,24 @@ def embed_many(texts: list[str]) -> list[list[float]]:
     finally:
         ex.shutdown(wait=False)
 
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+
+# A fixed (query, document) pair with zero shared vocabulary — reachability alone
+# doesn't prove the embedding backend is actually working: a wrong model, a
+# corrupted response, or a silently-truncated vector would still let embed()
+# return *something* without raising. Cosine similarity between a genuinely
+# related pair that share no literal words is what actually exercises semantic
+# understanding, not connectivity. Verified zero token overlap between these two
+# strings (case-insensitive, punctuation-stripped) before choosing them.
+_CANARY_QUERY = "How would someone get money back after paying out of pocket on a business trip?"
+_CANARY_DOCUMENT = "Employees can submit reimbursement requests for travel expenses through the finance portal."
+
 # ---------------------------------------------------------------------------
 # Keyword fallback (used when the embedding host is offline)
 # ---------------------------------------------------------------------------
@@ -415,17 +433,31 @@ def _load_degradation() -> dict:
     return json.loads(DEGRADATION_FILE.read_text()) if DEGRADATION_FILE.exists() else {}
 
 
-def _mark_healthy() -> None:
-    if _load_degradation().get("degraded_since") is not None:
-        DEGRADATION_FILE.write_text(json.dumps({"degraded_since": None}))
+def _mark_healthy(strong: bool = False) -> None:
+    """Clear degradation. query_docs's plain "embed() didn't raise" signal (the
+    default, `strong=False`) is weaker than codicil_status's canary check — it
+    never verifies embedding *quality*, only reachability — so it must not clear
+    a degradation the canary flagged: a corrupted-but-reachable model can still
+    let ordinary queries succeed while remaining genuinely untrustworthy, and
+    clearing that would reset degraded_since to "now" on the next canary check
+    instead of preserving the true onset. Only codicil_status's canary-validated
+    success (`strong=True`) can clear a canary-flagged degradation.
+    """
+    state = _load_degradation()
+    if state.get("degraded_since") is None:
+        return
+    if not strong and state.get("reason") == "canary":
+        return
+    DEGRADATION_FILE.write_text(json.dumps({"degraded_since": None, "reason": None}))
 
 
-def _mark_degraded() -> str | None:
+def _mark_degraded(reason: Literal["connectivity", "canary"] = "connectivity") -> str | None:
     """Record the first time degradation was observed; return that timestamp
     unchanged on subsequent calls so `degraded_since` reflects onset, not now."""
     state = _load_degradation()
     if state.get("degraded_since") is None:
         state["degraded_since"] = datetime.now(timezone.utc).isoformat()
+        state["reason"] = reason
         DEGRADATION_FILE.write_text(json.dumps(state))
     return state["degraded_since"]
 
@@ -519,6 +551,8 @@ class StatusResult(TypedDict):
     waiting for a real query to reveal degradation."""
     backend: Literal["semantic", "keyword_fallback"]
     degraded_since: str | None
+    canary_ok: bool  # a fixed no-lexical-overlap (query, doc) pair actually scores as related
+    canary_score: float | None  # None if the embed host was unreachable
     embed_url: str
     embed_model: str
     indexed_files: int
@@ -540,20 +574,31 @@ def codicil_status() -> StatusResult:
     # in-process query_docs/reindex_docs call (including query_docs's fast,
     # network-free keyword fallback) for that same window. Only the bookkeeping
     # below, which touches shared state, needs the lock.
+    # Connectivity alone doesn't prove the backend is trustworthy: a wrong model,
+    # a corrupted response, or a silently-truncated vector would still let embed()
+    # return *something* without raising. The canary must also score as related —
+    # a low score despite a successful embed() call counts as degraded too, since
+    # query_docs's real answers would be equally corrupted by the same cause.
+    degrade_reason: Literal["connectivity", "canary"] = "connectivity"
     try:
-        embed("codicil status check")
-        backend: Literal["semantic", "keyword_fallback"] = "semantic"
-        embed_failed = False
+        query_vec = embed(_CANARY_QUERY, kind="query")
+        doc_vec = embed(_CANARY_DOCUMENT, kind="document")
+        canary_score: float | None = round(_cosine_similarity(query_vec, doc_vec), 3)
+        canary_ok = canary_score >= MIN_SCORE
+        degrade_reason = "canary"  # embed reached the host fine; only the canary failed
     except RuntimeError:
-        backend = "keyword_fallback"
-        embed_failed = True
+        canary_score = None
+        canary_ok = False
+
+    healthy = canary_ok
+    backend: Literal["semantic", "keyword_fallback"] = "semantic" if healthy else "keyword_fallback"
 
     with _index_lock:
-        if embed_failed:
-            degraded_since = _mark_degraded()
-        else:
-            _mark_healthy()
+        if healthy:
+            _mark_healthy(strong=True)
             degraded_since = None
+        else:
+            degraded_since = _mark_degraded(degrade_reason)
 
         state = _load_state()
         stale = sum(
@@ -569,6 +614,8 @@ def codicil_status() -> StatusResult:
         return StatusResult(
             backend=backend,
             degraded_since=degraded_since,
+            canary_ok=canary_ok,
+            canary_score=canary_score,
             embed_url=EMBED_URL,
             embed_model=EMBED_MODEL,
             indexed_files=len(state),
