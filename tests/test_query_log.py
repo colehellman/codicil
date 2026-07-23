@@ -89,3 +89,19 @@ def test_codicil_status_does_not_write_to_the_query_log(docs_repo, fake_embed):
     # Synthetic canary traffic must not muddy a log meant to reflect real usage.
     server.codicil_status()
     assert _read_log_lines() == []
+
+
+def test_query_docs_degrades_instead_of_crashing_when_log_write_fails(docs_repo, monkeypatch, capsys):
+    # Regression: _log_query used to have no error handling, so any I/O failure
+    # (disk full, permissions, a misconfigured path) propagated out of
+    # query_docs entirely -- a logging side-channel taking down the tool's
+    # primary response, directly against "degrade, never fail". Point the log
+    # at a path whose parent doesn't exist -- open(..., "a") won't create it,
+    # so the write genuinely fails with a real OSError, without touching
+    # anything else's file I/O.
+    (docs_repo / "a.md").write_text("# A\n\nSome content long enough to survive chunking.\n")
+    monkeypatch.setattr(server, "QUERY_LOG_FILE", docs_repo / "no-such-dir" / "query_log.jsonl")
+
+    result = server.query_docs("anything")  # must not raise
+    assert result["backend"] == "keyword_fallback"
+    assert "codicil: could not write to query log" in capsys.readouterr().err

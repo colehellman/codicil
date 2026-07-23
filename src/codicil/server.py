@@ -472,16 +472,21 @@ QUERY_LOG_FILE = STORE_PATH / "query_log.jsonl"
 
 
 def _log_query(backend: str, top_score: float | None) -> None:
-    # No lock: a single write() of one short line is atomic on POSIX (well
-    # under PIPE_BUF), and the store's single-writer invariant already means
-    # only one process ever has this file open at a time.
-    line = json.dumps({
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "backend": backend,
-        "top_score": top_score,
-    })
-    with open(QUERY_LOG_FILE, "a") as f:
-        f.write(line + "\n")
+    # query_docs is @_synchronized, so this write is already serialized by
+    # _index_lock in-process; the store's single-writer invariant covers
+    # cross-process safety. Telemetry must not be able to break the tool it's
+    # observing -- a disk-full or permission error here degrades to "not
+    # logged," never to a crashed query_docs call.
+    try:
+        line = json.dumps({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "backend": backend,
+            "top_score": top_score,
+        })
+        with open(QUERY_LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except OSError as e:
+        print(f"codicil: could not write to query log — {e}", file=sys.stderr)
 
 
 def _finish(result: QueryResult, top_score: float | None) -> QueryResult:
@@ -489,17 +494,22 @@ def _finish(result: QueryResult, top_score: float | None) -> QueryResult:
     return result
 
 
-def _with_fallback_nudge(results: str) -> str:
+def _with_fallback_nudge(results: str, *, degraded: bool) -> str:
     # The `backend`/`degraded_since` fields exist so a calling assistant can detect
     # degradation programmatically -- but nothing forces it to act on them. This
     # appends a plain-text next step directly into the passage content itself,
     # the one thing every caller reads regardless of whether it inspects
-    # structured fields, so a codicil_status suggestion can't be silently dropped.
-    return (
-        f"{results}\n\n"
-        "_(Semantic search is currently unavailable — this used keyword search "
-        "instead. Run `codicil_status` for details.)_"
-    )
+    # structured fields. Two distinct messages, not one: an unindexed-but-healthy
+    # repo (degraded=False) is not an outage, and claiming "unavailable" here
+    # would reintroduce the exact false alarm degraded_since=None was built to
+    # prevent. Neither message names a specific command -- codicil_status is an
+    # MCP tool only, and this text is also read verbatim by `codicil query`'s
+    # CLI output, which has no such subcommand.
+    if degraded:
+        note = "Semantic search is currently unavailable — this used keyword search instead."
+    else:
+        note = "No semantic index exists yet for this repo — this used keyword search instead."
+    return f"{results}\n\n_({note})_"
 
 
 @mcp.tool()
@@ -522,7 +532,7 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         return _finish(QueryResult(
             backend="keyword_fallback",
             degraded_since=None,
-            results=_with_fallback_nudge(grep_fallback(query, n_results)),
+            results=_with_fallback_nudge(grep_fallback(query, n_results), degraded=False),
         ), top_score=None)
     try:
         q_vec = embed(query)
@@ -530,7 +540,7 @@ def query_docs(query: str, n_results: int = 5) -> QueryResult:
         return _finish(QueryResult(
             backend="keyword_fallback",
             degraded_since=_mark_degraded(),
-            results=_with_fallback_nudge(grep_fallback(query, n_results)),
+            results=_with_fallback_nudge(grep_fallback(query, n_results), degraded=True),
         ), top_score=None)
     _mark_healthy()
 
